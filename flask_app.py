@@ -124,7 +124,6 @@ def get_next_pending_task(chat_id):
 
     progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bot_idx": 0, "bot_repeat_count": 0, "bot_clicks": {}})
 
-    # 1. فحص القنوات الإجبارية أولاً (تتخطى تلقائياً إذا كانت فارغة)
     if forced_channels and not progress["channels_done"]:
         missing_channels = []
         for ch in forced_channels:
@@ -143,7 +142,6 @@ def get_next_pending_task(chat_id):
     else:
         progress["channels_done"] = True
 
-    # 2. فحص البوتات الإجبارية ثانياً (تتخطى تلقائياً إذا كانت فارغة مع التكرار المطلوب)
     if forced_bots and progress["bot_idx"] < len(forced_bots):
         b_idx = progress["bot_idx"]
         current_bot = forced_bots[b_idx]
@@ -153,7 +151,6 @@ def get_next_pending_task(chat_id):
         if current_repeats < repeat_target:
             return "bot", {"bot": current_bot, "idx": b_idx, "current": current_repeats + 1, "total": repeat_target}
 
-    # 3. أخيراً واجهة التحقق (Web App)
     if chat_id not in verified_users:
         return "webapp", None
 
@@ -184,8 +181,9 @@ def send_next_task_prompt(chat_id):
         requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"🤖 **مهمة البوت ({data['current']}/{data['total']}):**\n\nيجب التسجيل في البوت أولاً ثم الضغط على زر التحقق.", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
 
     elif task_type == "webapp":
-        url = "https://himynameis.pythonanywhere.com/"
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🛡 **الخطوة الأخيرة:** قم بتوثيق جهازك عبر زر الأمان أدناه لتنشيط الحساب:", "reply_markup": {"inline_keyboard": [[{"text": "🛡 توثيق الجهاز الآن (ZORO)", "web_app": {"url": url}}]]}, "parse_mode": "Markdown"})
+        # تم استبدال رابط بايثون اني وير برابط Render الخاص بك (يرجى التأكد من استبدال zoro-bot باسم خدمتك الفعلي على Render)
+        render_domain = os.environ.get("RENDER_EXTERNAL_URL", "https://zoro-bot.onrender.com")
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🛡 **الخطوة الأخيرة:** قم بتوثيق جهازك عبر زر الأمان أدناه لتنشيط الحساب:", "reply_markup": {"inline_keyboard": [[{"text": "🛡 توثيق الجهاز الآن (ZORO)", "web_app": {"url": render_domain}}]]}, "parse_mode": "Markdown"})
 
     elif task_type == "done":
         if chat_id not in verified_users and chat_id not in ADMIN_IDS:
@@ -351,7 +349,7 @@ def webhook():
                 send_telegram_message(chat_id, "📢 أرسل معرف القناة (مثال: `@ChannelUsername`):")
             elif data == "del_channel":
                 if not forced_channels: 
-                    send_telegram_message(chat_id, "⚠️️ لا توجد قنوات مسجلة.")
+                    send_telegram_message(chat_id, "⚠ لا توجد قنوات مسجلة.")
                 else:
                     buttons = [[{"text": f"🗑️ حذف {ch}", "callback_data": f"remove_ch_{ch}"}] for ch in forced_channels]
                     send_telegram_message(chat_id, "🗑 اختر القناة المراد حذفها:", reply_markup={"inline_keyboard": buttons})
@@ -543,4 +541,5 @@ def webhook():
     return "OK", 200
 
 if __name__ == '__main__':
-    app.run(port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
