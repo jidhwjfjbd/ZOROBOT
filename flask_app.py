@@ -72,7 +72,6 @@ HTML_TEMPLATE = """
         <h2>نظام حماية ZORO</h2>
         <p style="color: #94a3b8; font-size: 14px; margin-bottom: 20px;">قم بتأكيد بصمة جهازك لتنشيط الحساب نهائياً.</p>
         <button id="verifyBtn" class="btn" onclick="processVerification()">تأكيد الهوية والجهاز ✨</button>
-        <!-- تحذير القنوات والبوتات يظهر فقط إذا وجدت مهام غير مكتملة -->
         <div id="channels-warning" class="warning-box">⚠️ يجب إكمال القنوات والبوتات أولاً!</div>
         <div id="status" style="margin-top:15px; font-size:14px; font-weight:600;"></div>
     </div>
@@ -181,8 +180,7 @@ def send_next_task_prompt(chat_id):
         requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"🤖 **مهمة البوت ({data['current']}/{data['total']}):**\n\nيجب التسجيل في البوت أولاً ثم الضغط على زر التحقق.", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
 
     elif task_type == "webapp":
-        # تم استبدال رابط بايثون اني وير برابط Render الخاص بك (يرجى التأكد من استبدال zoro-bot باسم خدمتك الفعلي على Render)
-        render_domain = os.environ.get("RENDER_EXTERNAL_URL", "https://zoro-bot.onrender.com")
+        render_domain = os.environ.get("RENDER_EXTERNAL_URL", "https://zorobot-qbm3.onrender.com")
         requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🛡 **الخطوة الأخيرة:** قم بتوثيق جهازك عبر زر الأمان أدناه لتنشيط الحساب:", "reply_markup": {"inline_keyboard": [[{"text": "🛡 توثيق الجهاز الآن (ZORO)", "web_app": {"url": render_domain}}]]}, "parse_mode": "Markdown"})
 
     elif task_type == "done":
@@ -248,8 +246,15 @@ def verify():
             return jsonify({'success': False, 'message': '⚠️ يجب إكمال القنوات والبوتات أولاً!'}), 400
 
     verified_users.add(user_id)
-    return jsonify({'success': True})
+    
+    if chat_id_in_referral := invited_by.get(user_id):
+        if chat_id_in_referral != user_id and user_id not in user_referrals.get(chat_id_in_referral, []):
+            reward = bot_settings["referral_reward"]
+            user_balances[chat_id_in_referral] = user_balances.get(chat_id_in_referral, 0.0) + reward
+            user_referrals.setdefault(chat_id_in_referral, []).append(user_id)
+            send_telegram_message(chat_id_in_referral, f"🎉 شخص ما انضم عبر رابط إحالتك وأتم التحقق بنجاح! حصلت على `{reward} TON`.")
 
+    return jsonify({'success': True})
 def execute_broadcast(admin_id):
     b_data = broadcast_data.get(admin_id)
     if not b_data: 
@@ -294,6 +299,7 @@ def send_telegram_message(chat_id, text, reply_markup=None, parse_mode="Markdown
         requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload)
     except Exception: 
         pass
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     global forced_bots, forced_channels, withdrawal_counter
@@ -508,7 +514,7 @@ def webhook():
 
         if text == "🎁 رابط الإحالة":
             reward_val = bot_settings["referral_reward"]
-            send_main_menu(chat_id, f"🎁 رابط الإحالة الخاص بك:\n`https://t.me/{BOT_USERNAME}?start={chat_id}`\n\n💰 **سعر الإحالة:** `{reward_val} TON` لكل شخص يقوم بالانضمام وتخطّي المهام والتحقق.\nعدد إحالاتك الناجحة: `{len(user_referrals.get(chat_id, []))}`")
+            send_main_menu(chat_id, f"🎁 رابط الإحالة الخاص بك:\n`https://t.me/{BOT_USERNAME}?start={chat_id}`\n\n💰 **سعر الإحالة:** `{reward_val} TON` لكل شخص يقوم بالانضمام وتخطّي المهام والتحقق الكامل.\nعدد إحالاتك الناجحة: `{len(user_referrals.get(chat_id, []))}`")
         elif text == "💎 رصيدي والسحب":
             bal = 999999.0 if chat_id in ADMIN_IDS else user_balances.get(chat_id, 0.0)
             min_w = bot_settings["min_withdrawal"]
