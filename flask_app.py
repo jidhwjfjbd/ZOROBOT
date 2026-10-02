@@ -192,6 +192,201 @@ def send_next_task_prompt(chat_id):
                     send_telegram_message(referrer_id, f"🎉 سجل @{new_user_username} الدخول للبوت عبر رابطك واجتاز شروط التحقق والمهام بنجاح! حصلت على `{reward} TON`.")
         
         send_main_menu(chat_id, "✨ تمت كافة خطوات التحقق بنجاح وأصبح حسابك مفعلاً بالكامل!")
+import os
+import requests
+import time
+import hashlib
+from flask import Flask, request, jsonify, render_template_string
+from datetime import datetime
+
+BOT_TOKEN = "8785452517:AAGy-93isP7k1qQxO_LIDb7yZMjieDhJFiw"
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+ADMIN_IDS = [8667934765, 8557464787]
+PRIMARY_ADMIN_USERNAME = "@sig2siel"
+PROOF_CHANNEL_ID = "@Proofsofbotwithdrawal"
+
+bot_settings = {
+    "referral_reward": 0.10,
+    "min_withdrawal": 1.00
+}
+
+app = Flask(__name__)
+
+BOT_USERNAME = "ZoroBot"
+try:
+    bot_info = requests.get(f"{TELEGRAM_API_URL}/getMe").json()
+    if bot_info.get("ok"):
+        BOT_USERNAME = bot_info["result"]["username"]
+except Exception:
+    pass
+
+registered_fingerprints = {}
+verified_users = set()
+banned_users = set()
+all_bot_users = set()
+user_balances = {}
+user_wallets = {}
+user_referrals = {}
+invited_by = {}
+pending_withdrawals = {}
+user_has_pending = set()
+user_last_active = {}
+withdrawal_counter = 0
+
+forced_channels = []  
+forced_bots = []      
+
+user_task_progress = {} 
+
+admin_states = {}
+user_states = {}      
+temp_bot_data = {}    
+broadcast_data = {}   
+
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZORO Security - نظام التحقق</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fingerprintjs2/2.1.4/fingerprint2.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
+        .card { background: #1e293b; padding: 30px 24px; border-radius: 20px; text-align: center; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5); width: 100%; max-width: 380px; border: 1px solid #334155; }
+        .btn { background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); color: white; border: none; padding: 14px; border-radius: 12px; font-size: 16px; font-weight: bold; width: 100%; cursor: pointer; margin-bottom: 12px; }
+        .warning-box { background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; color: #fca5a5; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; display: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>نظام حماية ZORO</h2>
+        <p style="color: #94a3b8; font-size: 14px; margin-bottom: 20px;">قم بتأكيد بصمة جهازك لتنشيط الحساب نهائياً.</p>
+        <button id="verifyBtn" class="btn" onclick="processVerification()">تأكيد الهوية والجهاز ✨</button>
+        <div id="channels-warning" class="warning-box">⚠️ يجب إكمال القنوات والبوتات أولاً!</div>
+        <div id="status" style="margin-top:15px; font-size:14px; font-weight:600;"></div>
+    </div>
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        
+        fetch('/check_status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 0 })
+        }).then(res => res.json()).then(data => {
+            if (data.has_pending_tasks) {
+                document.getElementById('channels-warning').style.display = 'block';
+            } else {
+                document.getElementById('channels-warning').style.display = 'none';
+            }
+        }).catch(() => {});
+
+        function processVerification() {
+            Fingerprint2.get((components) => {
+                const values = components.map((pair) => pair.value);
+                const hash = Fingerprint2.x64hash128(values.join(''), 31);
+                const user = tg.initDataUnsafe.user || { id: 0 };
+                fetch('/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: user.id, fingerprint: hash })
+                }).then(res => res.json()).then(data => {
+                    if (data.success) { 
+                        document.getElementById('status').style.color = '#34d399';
+                        document.getElementById('status').innerText = "✅ تم التحقق بنجاح!"; 
+                        setTimeout(() => tg.close(), 1200); 
+                    } else { 
+                        document.getElementById('status').style.color = '#f87171';
+                        document.getElementById('status').innerText = data.message || "❌ خطأ!"; 
+                    }
+                });
+            });
+        }
+    </script>
+</body>
+</html>
+"""
+
+def get_next_pending_task(chat_id):
+    if chat_id in ADMIN_IDS:
+        return "done", None
+
+    progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
+
+    if forced_channels and not progress["channels_done"]:
+        missing_channels = []
+        for ch in forced_channels:
+            clean_ch = ch.strip()
+            try:
+                res = requests.get(f"{TELEGRAM_API_URL}/getChatMember", params={"chat_id": clean_ch, "user_id": chat_id}).json()
+                if not res.get("ok") or res["result"]["status"] not in ["creator", "administrator", "member"]:
+                    missing_channels.append(clean_ch)
+            except Exception:
+                missing_channels.append(clean_ch)
+        
+        if not missing_channels:
+            progress["channels_done"] = True
+        else:
+            return "channel", missing_channels
+    else:
+        progress["channels_done"] = True
+
+    if forced_bots and not progress["bots_done"]:
+        target_repeats = 6  
+        current_repeats = progress.get("bot_repeat_count", 0)
+        if current_repeats < target_repeats:
+            return "bots_all", forced_bots
+        else:
+            progress["bots_done"] = True
+
+    if chat_id not in verified_users:
+        return "webapp", None
+
+    return "done", None
+
+def send_next_task_prompt(chat_id):
+    task_type, data = get_next_pending_task(chat_id)
+
+    if task_type == "channel":
+        buttons = []
+        for ch in data:
+            ch_name = ch.replace('@', '')
+            buttons.append([{"text": f"📢 انضمام إلى {ch}", "url": f"https://t.me/{ch_name}"}])
+        buttons.append([{"text": "✅ تحقق من الاشتراك", "callback_data": "check_next_task"}])
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "⚠️ **الخطوة الأولى:** يجب عليك الانضمام إلى القنوات التالية أولاً للاستمرار:", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
+
+    elif task_type == "bots_all":
+        buttons = []
+        for b_info in data:
+            b_url = b_info["url"]
+            if not b_url.startswith("http"):
+                b_url = f"https://t.me/{b_info['url'].replace('@', '')}"
+            buttons.append([{"text": f"🤖 تسجيل في بوت: {b_info['name']}", "url": b_url}])
+        buttons.append([{"text": "✅ تحقق من التسجيل", "callback_data": "click_all_bots"}])
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🤖 **مهام البوتات الإجبارية:**\n\nيجب التسجيل في جميع البوتات أعلاه أولاً ثم الضغط على زر التحقق أدناه للمتابعة.", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
+
+    elif task_type == "webapp":
+        render_domain = os.environ.get("RENDER_EXTERNAL_URL", "https://zorobot-qbm3.onrender.com")
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🛡 **الخطوة الأخيرة:** قم بتوثيق جهازك عبر زر الأمان أدناه لتنشيط الحساب:", "reply_markup": {"inline_keyboard": [[{"text": "🛡 توثيق الجهاز الآن (ZORO)", "web_app": {"url": render_domain}}]]}, "parse_mode": "Markdown"})
+
+    elif task_type == "done":
+        if chat_id not in verified_users and chat_id not in ADMIN_IDS:
+            verified_users.add(chat_id)
+            if chat_id in invited_by:
+                referrer_id = invited_by[chat_id]
+                if referrer_id != chat_id and chat_id not in user_referrals.get(referrer_id, []):
+                    reward = bot_settings["referral_reward"]
+                    user_balances[referrer_id] = user_balances.get(referrer_id, 0.0) + reward
+                    user_referrals.setdefault(referrer_id, []).append(chat_id)
+                    new_user_username = user_task_progress.get(chat_id, {}).get("username", "مستخدم جديد")
+                    send_telegram_message(referrer_id, f"🎉 سجل @{new_user_username} الدخول للبوت عبر رابطك واجتاز شروط التحقق والمهام بنجاح! حصلت على `{reward} TON`.")
+        
+        send_main_menu(chat_id, "✨ تمت كافة خطوات التحقق بنجاح وأصبح حسابك مفعلاً بالكامل!")
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
@@ -252,15 +447,19 @@ def verify():
     return jsonify({'success': True})
 
 def execute_broadcast(admin_id):
-    b_data = broadcast_data.get(admin_id)
-    if not b_data: 
+    b_msg = broadcast_data.get(admin_id)
+    if not b_msg: 
         return
     success = 0
     for uid in list(all_bot_users):
         try:
-            if b_data.get("type") == "text":
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": uid, "text": b_data["text"], "parse_mode": "Markdown"})
-                success += 1
+            # نسخ الرسالة الأصلية بكل محتوياتها (نصوص، صور، فيديوهات، ملفات، أزرار، وروابط) إلى كل مستخدم
+            requests.post(f"{TELEGRAM_API_URL}/copyMessage", json={
+                "chat_id": uid,
+                "from_chat_id": admin_id,
+                "message_id": b_msg
+            })
+            success += 1
         except Exception: 
             pass
     broadcast_data.pop(admin_id, None)
@@ -353,7 +552,7 @@ def webhook():
 
             if data == "start_broadcast":
                 admin_states[chat_id] = "waiting_broadcast"
-                send_telegram_message(chat_id, "📢 أرسل محتوى رسالة الإذاعة الجماعية (تدعم الماركداون):")
+                send_telegram_message(chat_id, "📢 **أرسل الآن الرسالة التي تريد إذاعتها (صورة، فيديو، نص، ملف، أو أزرار وراوبط):**")
             elif data == "set_ref_reward": 
                 admin_states[chat_id] = "waiting_ref_reward"
                 send_telegram_message(chat_id, "✍️ أدخل سعر الإحالة الجديد:")
@@ -409,7 +608,7 @@ def webhook():
         return "OK", 200
 
     if "message" in update:
-        msg = update["message"]
+        msg = update["message = update["message"]
         chat_id, text = msg["chat"]["id"], msg.get("text", "")
         username = msg["from"].get("username") or f"user_{chat_id}"
         all_bot_users.add(chat_id)
@@ -431,8 +630,8 @@ def webhook():
             state = admin_states[chat_id]
             if state == "waiting_broadcast":
                 admin_states.pop(chat_id, None)
-                broadcast_data[chat_id] = {"type": "text", "text": text}
-                send_telegram_message(chat_id, "هل تريد تأكيد إرسال الإذاعة لجميع المستخدمين؟", reply_markup={"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]})
+                broadcast_data[chat_id] = msg["message_id"]
+                send_telegram_message(chat_id, "هل تريد تأكيد إرسال هذه الرسالة كإذاعة لجميع المستخدمين؟", reply_markup={"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]})
             elif state == "waiting_ref_reward":
                 admin_states.pop(chat_id, None)
                 bot_settings["referral_reward"] = float(text.strip())
