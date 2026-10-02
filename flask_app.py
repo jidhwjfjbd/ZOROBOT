@@ -29,7 +29,6 @@ try:
 except Exception:
     pass
 
-# قراءة رابط قاعدة البيانات حصرياً من متغيرات البيئة لمنع أي تضارب
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def init_db():
@@ -83,7 +82,6 @@ admin_states = {}
 user_states = {}      
 temp_bot_data = {}    
 broadcast_data = {}   
-
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -150,6 +148,7 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
 def get_next_pending_task(chat_id):
     if chat_id in ADMIN_IDS:
         return "done", None
@@ -175,7 +174,7 @@ def get_next_pending_task(chat_id):
         progress["channels_done"] = True
 
     if forced_bots and not progress["bots_done"]:
-        target_repeats = 4  # تم التعديل إلى 4 مرات
+        target_repeats = 4  
         current_repeats = progress.get("bot_repeat_count", 0)
         if current_repeats < target_repeats:
             return "bots_all", forced_bots
@@ -380,6 +379,7 @@ def send_main_menu(chat_id, text):
     if chat_id in ADMIN_IDS:
         admin_inline = {
             "inline_keyboard": [
+                [{"text": "📦 طلبات السحب المعلقة", "callback_data": "check_pending_withdrawals"}],
                 [{"text": "📢 إذاعة جماعية", "callback_data": "start_broadcast"}],
                 [{"text": "💰 تعديل الإحالة", "callback_data": "set_ref_reward"}, {"text": "💸 تعديل السحب", "callback_data": "set_min_withdrawal"}],
                 [{"text": "📢 إضافة قناة", "callback_data": "add_channel"}, {"text": "🗑 حذف قناة", "callback_data": "del_channel"}],
@@ -543,7 +543,6 @@ def webhook():
         cursor.close()
         db.close()
         return "OK", 200
-
     if "message" in update:
         msg = update["message"]
         chat_id, text = msg["chat"]["id"], msg.get("text", "")
@@ -568,41 +567,63 @@ def webhook():
                 send_main_menu(chat_id, "🔙 تم العودة للقائمة الرئيسية:")
             return "OK", 200
 
-        if chat_id in ADMIN_IDS and chat_id in admin_states:
-            state = admin_states[chat_id]
-            if state == "waiting_broadcast":
-                admin_states.pop(chat_id, None)
-                broadcast_data[chat_id] = msg["message_id"]
-                send_telegram_message(chat_id, "هل تريد تأكيد إرسال هذه الرسالة كإذاعة لجميع المستخدمين؟", reply_markup={"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]})
-            elif state == "waiting_ref_reward":
-                admin_states.pop(chat_id, None)
-                bot_settings["referral_reward"] = float(text.strip())
-                send_telegram_message(chat_id, "✅ تم تحديث سعر الإحالة بنجاح.")
-            elif state == "waiting_min_withdrawal":
-                admin_states.pop(chat_id, None)
-                bot_settings["min_withdrawal"] = float(text.strip())
-                send_telegram_message(chat_id, "✅ تم تحديث الحد الأدنى للسحب بنجاح.")
-            elif state == "waiting_add_channel":
-                admin_states.pop(chat_id, None)
-                ch = text.strip()
-                if ch not in forced_channels: 
-                    forced_channels.append(ch)
-                user_task_progress.clear()
-                send_telegram_message(chat_id, f"✅ تم إضافة القناة `{ch}` بنجاح وتحديث المهام لجميع المستخدمين.")
-            elif state == "waiting_bot_url":
-                temp_bot_data[chat_id] = {"url": text.strip()}
-                admin_states[chat_id] = "waiting_bot_name"
-                send_telegram_message(chat_id, "✍️ أرسل الاسم الذي سيظهر للمستخدم كمميز في قائمة البوتات الإجبارية:")
-            elif state == "waiting_bot_name":
-                admin_states.pop(chat_id, None)
-                b_url = temp_bot_data.pop(chat_id, {}).get("url", "")
-                b_name = text.strip()
-                forced_bots.append({"name": b_name, "url": b_url})
-                user_task_progress.clear()
-                send_telegram_message(chat_id, f"✅ تم إضافة البوت `{b_name}` بنجاح ليظهر لجميع المستخدمين.")
-            cursor.close()
-            db.close()
-            return "OK", 200
+        if chat_id in ADMIN_IDS:
+            if text.startswith("📦 طلبات السحب المعلقة"):
+                cursor.execute("SELECT * FROM pending_withdrawals")
+                pend_rows = cursor.fetchall()
+                if not pend_rows:
+                    send_telegram_message(chat_id, "✅ لا توجد أي طلبات سحب معلقة حالياً.")
+                else:
+                    send_telegram_message(chat_id, f"📦 لديك `{len(pend_rows)}` طلب سحب معلق:")
+                    for req in pend_rows:
+                        w_id, u_id, amount, wallet, username = req["w_id"], req["user_id"], req["amount"], req["wallet"], req["username"]
+                        kb = {"inline_keyboard": [[{"text": "✅ قبول", "callback_data": f"approve_w_{w_id}"}, {"text": "❌ رفض", "callback_data": f"reject_w_{w_id}"}]]}
+                        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
+                            "chat_id": chat_id, 
+                            "text": f"📌 **طلب معلق:**\n👤 User: @{username}\n🆔 Chat ID: `{u_id}`\n💎 Amount: `{amount} TON`\n💳 Wallet: `{wallet}`", 
+                            "reply_markup": kb, 
+                            "parse_mode": "Markdown"
+                        })
+                cursor.close()
+                db.close()
+                return "OK", 200
+
+            if chat_id in admin_states:
+                state = admin_states[chat_id]
+                if state == "waiting_broadcast":
+                    admin_states.pop(chat_id, None)
+                    broadcast_data[chat_id] = msg["message_id"]
+                    send_telegram_message(chat_id, "هل تريد تأكيد إرسال هذه الرسالة كإذاعة لجميع المستخدمين؟", reply_markup={"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]})
+                elif state == "waiting_ref_reward":
+                    admin_states.pop(chat_id, None)
+                    bot_settings["referral_reward"] = float(text.strip())
+                    send_telegram_message(chat_id, "✅ تم تحديث سعر الإحالة بنجاح.")
+                elif state == "waiting_min_withdrawal":
+                    admin_states.pop(chat_id, None)
+                    bot_settings["min_withdrawal"] = float(text.strip())
+                    send_telegram_message(chat_id, "✅ تم تحديث الحد الأدنى للسحب بنجاح.")
+                elif state == "waiting_add_channel":
+                    admin_states.pop(chat_id, None)
+                    ch = text.strip()
+                    if ch not in forced_channels: 
+                        forced_channels.append(ch)
+                    user_task_progress.clear()
+                    send_telegram_message(chat_id, f"✅ تم إضافة القناة `{ch}` بنجاح وتحديث المهام لجميع المستخدمين.")
+                elif state == "waiting_bot_url":
+                    temp_bot_data[chat_id] = {"url": text.strip()}
+                    admin_states[chat_id] = "waiting_bot_name"
+                    send_telegram_message(chat_id, "✍️ أرسل الاسم الذي سيظهر للمستخدم كمميز في قائمة البوتات الإجبارية:")
+                elif state == "waiting_bot_name":
+                    admin_states.pop(chat_id, None)
+                    b_url = temp_bot_data.pop(chat_id, {}).get("url", "")
+                    b_name = text.strip()
+                    forced_bots.append({"name": b_name, "url": b_url})
+                    user_task_progress.clear()
+                    send_telegram_message(chat_id, f"✅ تم إضافة البوت `{b_name}` بنجاح ليظهر لجميع المستخدمين.")
+                cursor.close()
+                db.close()
+                return "OK", 200
+
         if chat_id in user_states:
             state = user_states.pop(chat_id, None)
             if state == "waiting_wallet":
