@@ -8,7 +8,7 @@ from datetime import datetime
 app = Flask(__name__)
 
 # تم تعيين البيانات الخاصة بك مباشرة هنا
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "7963385287:AAH0pWb-Yn70WbWqGjE90P7O0h57W82K6Zc") # استبدله بالتوكن الفعلي إذا لزم الأمر
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8785452517:AAGy-93isP7k1qQxO_LIDb7yZMjieDhJFiw") # استبدله بالتوكن الفعلي إذا لزم الأمر
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 BOT_USERNAME = "freemoneytgffbot"
 ADMIN_IDS = [8667934765, 8557464787]
