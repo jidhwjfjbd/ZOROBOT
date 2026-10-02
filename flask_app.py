@@ -9,25 +9,20 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# إعدادات البوت وقاعدة البيانات (تم دمج بياناتك الحقيقية)
 TELEGRAM_BOT_TOKEN = "8785452517:AAGy-93isP7k1qQxO_LIDb7yZMjieDhJFiw"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "YourBotUsername")
 PROOF_CHANNEL_ID = os.environ.get("PROOF_CHANNEL_ID", "@YourProofChannel")
 
-# كلمة سر خاصة برابط لوحة تحكم الويب للأدمن
 ADMIN_WEB_PASSWORD = os.environ.get("ADMIN_WEB_PASSWORD", "zoro_admin_secure_123")
-
-# معرفات المشرفين الأدمن (تم دمج آيدي الخاص بك)
 ADMIN_IDS = [8557464787]
-PRIMARY_ADMIN_USERNAME = os.environ.get("PRIMARY_ADMIN_USERNAME", "@AdminUsername")
+PRIMARY_ADMIN_USERNAME = "@m9aws"
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_db():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
-# تهيئة الجداول في قاعدة البيانات
 def init_db():
     db = get_db()
     cursor = db.cursor()
@@ -66,7 +61,6 @@ def init_db():
 
 init_db()
 
-# متغيرات النظام المؤقتة
 bot_settings = {
     "referral_reward": 0.01,
     "min_withdrawal": 0.01
@@ -102,14 +96,96 @@ def send_main_menu(chat_id, text_msg):
     }
     send_telegram_message(chat_id, text_msg, reply_markup=markup)
 
+def check_channel_membership(chat_id, channel):
+    try:
+        res = requests.get(f"{TELEGRAM_API_URL}/getChatMember", params={"chat_id": channel, "user_id": chat_id}).json()
+        if res.get("ok"):
+            status = res["result"].get("status")
+            if status in ["member", "administrator", "creator"]:
+                return True
+    except Exception:
+        pass
+    return False
+
 def get_next_pending_task(chat_id):
+    for ch in forced_channels:
+        if not check_channel_membership(chat_id, ch):
+            return "channel", ch
+            
+    if forced_bots:
+        progress = user_task_progress.get(chat_id, {})
+        if not progress.get("bots_done", False):
+            idx = progress.get("current_bot_index", 0)
+            if idx < len(forced_bots):
+                return "bot", forced_bots[idx]
     return "done", None
 
 def send_next_task_prompt(chat_id):
-    pass
+    task_type, task_data = get_next_pending_task(chat_id)
+    if task_type == "channel":
+        kb = {
+            "inline_keyboard": [
+                [{"text": "📢 انضم إلى القناة", "url": f"https://t.me/{task_data.replace('@', '')}"}],
+                [{"text": "✅ تحقق من الاشتراك", "callback_data": f"verify_ch_{task_data}"}]
+            ]
+        }
+        send_telegram_message(chat_id, f"⚠️ **يجب عليك الانضمام إلى القناة الإجبارية أولاً لتتمكن من استخدام البوت:**\n\n{task_data}", reply_markup=kb)
+    elif task_type == "bot":
+        b_name = task_data["name"]
+        b_url = task_data["url"]
+        kb = {
+            "inline_keyboard": [
+                [{"text": f"🤖 {b_name}", "url": b_url}],
+                [{"text": "✅ تحقق من إتمام المهمة", "callback_data": f"verify_bot_{b_name}"}]
+            ]
+        }
+        send_telegram_message(chat_id, f"⚠️ **يجب عليك زيارة البوت التالي وإتمام المهمة:**\n\n📌 {b_name}", reply_markup=kb)
+    elif task_type == "done":
+        db = get_db()
+        cursor = db.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT verified, invited_by FROM users WHERE chat_id = %s", (chat_id,))
+        urow = cursor.fetchone()
+        if urow and urow["verified"] == 0:
+            cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = %s", (chat_id,))
+            db.commit()
+            
+            ref_id = urow["invited_by"]
+            if ref_id and ref_id != chat_id:
+                cursor.execute("SELECT * FROM referrals WHERE referrer_id = %s AND referred_id = %s", (ref_id, chat_id))
+                if not cursor.fetchone():
+                    cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s)", (ref_id, chat_id))
+                    reward = bot_settings["referral_reward"]
+                    cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (reward, ref_id))
+                    db.commit()
+                    send_telegram_message(ref_id, f"🎉 **مبروك! انضم مستخدم جديد عبر رابط إحالتك واجتاز المهام بنجاح.**\nتمت إضافة `{reward} TON` إلى رصيدك.")
+        cursor.close()
+        db.close()
+        send_main_menu(chat_id, "✅ **تم اجتياز جميع المهام والتحقق بنجاح!**\nأهلاً بك في البوت:")
 
 def execute_broadcast(admin_chat_id):
-    pass
+    msg_id = broadcast_data.get(admin_chat_id)
+    if not msg_id:
+        return
+    db = get_db()
+    cursor = db.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT chat_id FROM users")
+    users = cursor.fetchall()
+    cursor.close()
+    db.close()
+
+    success, failed = 0, 0
+    for u in users:
+        res = requests.post(f"{TELEGRAM_API_URL}/copyMessage", json={
+            "chat_id": u["chat_id"],
+            "from_chat_id": admin_chat_id,
+            "message_id": msg_id
+        }).json()
+        if res.get("ok"):
+            success += 1
+        else:
+            failed += 1
+        time.sleep(0.05)
+    send_telegram_message(admin_chat_id, f"📢 **تم الانتهاء من الإذاعة الجماعية:**\n\n✅ نجح الإرسال إلى: `{success}` مستخدم\n❌ فشل الإرسال إلى: `{failed}` مستخدم")
 ADMIN_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -232,15 +308,6 @@ def webhook():
             return "OK", 200
 
     if "callback_query" in update:
-        chat_type = update["callback_query"]["message"]["chat"].get("type", "private")
-        if chat_type in ["group", "supergroup"]:
-            try:
-                requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": update["callback_query"]["id"]})
-            except Exception:
-                pass
-            return "OK", 200
-
-    if "callback_query" in update:
         cb = update["callback_query"]
         cb_id, chat_id, msg_id, data = cb["id"], cb["message"]["chat"]["id"], cb["message"]["message_id"], cb.get("data", "")
         try: 
@@ -250,6 +317,35 @@ def webhook():
 
         db = get_db()
         cursor = db.cursor(cursor_factory=RealDictCursor)
+
+        if data.startswith("verify_ch_"):
+            ch = data.replace("verify_ch_", "")
+            if check_channel_membership(chat_id, ch):
+                requests.post(f"{TELEGRAM_API_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": msg_id})
+                send_next_task_prompt(chat_id)
+            else:
+                requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "❌ لم تقم بالانضمام للقناة بعد!", "show_alert": True})
+            cursor.close()
+            db.close()
+            return "OK", 200
+
+        if data.startswith("verify_bot_"):
+            b_name = data.replace("verify_bot_", "")
+            progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0, "current_bot_index": 0})
+            progress["bot_repeat_count"] = progress.get("bot_repeat_count", 0) + 1
+            
+            if progress["bot_repeat_count"] < 4:
+                requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "⚠️ يرجى التفاعل مع البوت وزيارة الرابط بشكل كامل ثم الضغط مجدداً.", "show_alert": True})
+            else:
+                progress["bot_repeat_count"] = 0
+                progress["current_bot_index"] = progress.get("current_bot_index", 0) + 1
+                if progress["current_bot_index"] >= len(forced_bots):
+                    progress["bots_done"] = True
+                requests.post(f"{TELEGRAM_API_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": msg_id})
+                send_next_task_prompt(chat_id)
+            cursor.close()
+            db.close()
+            return "OK", 200
 
         if chat_id in ADMIN_IDS:
             if data == "check_pending_withdrawals":
@@ -303,7 +399,7 @@ def webhook():
 
             if data == "start_broadcast":
                 admin_states[chat_id] = "waiting_broadcast"
-                send_telegram_message(chat_id, "📢 **أرسل الآن الرسالة التي تريد إذاعتها (صورة، فيديو، نص، ملف، أو أزرار وراوبط):**")
+                send_telegram_message(chat_id, "📢 **أرسل الآن الرسالة الشاملة التي تريد إذاعتها (صورة، فيديو، نص، ملف، أو أزرار وراوبط):**")
             elif data == "set_ref_reward": 
                 admin_states[chat_id] = "waiting_ref_reward"
                 send_telegram_message(chat_id, "✍️ أدخل سعر الإحالة الجديد:")
@@ -356,7 +452,7 @@ def webhook():
         cursor.execute("INSERT INTO users (chat_id, username, balance, verified, banned, last_active) VALUES (%s, %s, 0.0, 0, 0, %s) ON CONFLICT (chat_id) DO UPDATE SET username = EXCLUDED.username, last_active = EXCLUDED.last_active", (chat_id, username, time.time()))
         db.commit()
 
-        user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})["username"] = username
+        user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0, "current_bot_index": 0})["username"] = username
 
         if text == "🔙 العودة للقائمة الرئيسية":
             user_states.pop(chat_id, None)
@@ -396,7 +492,7 @@ def webhook():
                 if state == "waiting_broadcast":
                     admin_states.pop(chat_id, None)
                     broadcast_data[chat_id] = msg["message_id"]
-                    send_telegram_message(chat_id, "هل تريد تأكيد إرسال هذه الرسالة كإذاعة لجميع المستخدمين؟", reply_markup={"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]})
+                    send_telegram_message(chat_id, "هل تريد تأكيد إرسال هذه الرسالة كإذاعة شاملة لجميع المستخدمين؟", reply_markup={"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]})
                 elif state == "waiting_ref_reward":
                     admin_states.pop(chat_id, None)
                     bot_settings["referral_reward"] = float(text.strip())
@@ -415,7 +511,7 @@ def webhook():
                 elif state == "waiting_bot_url":
                     temp_bot_data[chat_id] = {"url": text.strip()}
                     admin_states[chat_id] = "waiting_bot_name"
-                    send_telegram_message(chat_id, "✍️️ أرسل الاسم الذي سيظهر للمستخدم كمميز في قائمة البوتات الإجبارية:")
+                    send_telegram_message(chat_id, "✍ أرسل الاسم الذي سيظهر للمستخدم كمميز في قائمة البوتات الإجبارية:")
                 elif state == "waiting_bot_name":
                     admin_states.pop(chat_id, None)
                     b_url = temp_bot_data.pop(chat_id, {}).get("url", "")
@@ -518,10 +614,6 @@ def webhook():
                             cursor.execute("UPDATE users SET invited_by = %s WHERE chat_id = %s", (referrer_id, chat_id))
                             db.commit()
 
-            cursor.execute("SELECT verified FROM users WHERE chat_id = %s", (chat_id,))
-            row = cursor.fetchone()
-            is_verified = row["verified"] if row else 0
-
             if chat_id in ADMIN_IDS:
                 cursor.execute("SELECT COUNT(*) as cnt FROM pending_withdrawals")
                 p_row = cursor.fetchone()
@@ -556,7 +648,14 @@ def webhook():
                 send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت ZORO!")
             return "OK", 200
 
-        elif text == "🎁 رابط الإحالة":
+        task_type, _ = get_next_pending_task(chat_id)
+        if task_type != "done":
+            send_next_task_prompt(chat_id)
+            cursor.close()
+            db.close()
+            return "OK", 200
+
+        if text == "🎁 رابط الإحالة":
             ref_link = f"https://t.me/{BOT_USERNAME}?start={chat_id}"
             cursor.execute("SELECT COUNT(*) as count FROM referrals WHERE referrer_id = %s", (chat_id,))
             ref_count = cursor.fetchone()["count"]
