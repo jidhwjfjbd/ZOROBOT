@@ -11,7 +11,7 @@ app = Flask(__name__)
 
 TELEGRAM_BOT_TOKEN = "8785452517:AAGy-93isP7k1qQxO_LIDb7yZMjieDhJFiw"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-BOT_USERNAME = "NeoEarnBot"
+BOT_USERNAME = "freemoneytgffbot"
 PROOF_CHANNEL_ID = os.environ.get("PROOF_CHANNEL_ID", "@YourProofChannel")
 
 ADMIN_WEB_PASSWORD = os.environ.get("ADMIN_WEB_PASSWORD", "zoro_admin_secure_123")
