@@ -9,8 +9,8 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# إعدادات قاعدة البيانات و تليجرام
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN")
+# إعدادات البوت وقاعدة البيانات (تم دمج بياناتك الحقيقية)
+TELEGRAM_BOT_TOKEN = "8785452517:AAGy-93isP7k1qQxO_LIDb7yZMjieDhJFiw"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "YourBotUsername")
 PROOF_CHANNEL_ID = os.environ.get("PROOF_CHANNEL_ID", "@YourProofChannel")
@@ -18,8 +18,8 @@ PROOF_CHANNEL_ID = os.environ.get("PROOF_CHANNEL_ID", "@YourProofChannel")
 # كلمة سر خاصة برابط لوحة تحكم الويب للأدمن
 ADMIN_WEB_PASSWORD = os.environ.get("ADMIN_WEB_PASSWORD", "zoro_admin_secure_123")
 
-# قائمة معرفات المشرفين الأدمن
-ADMIN_IDS = [int(admin_id.strip()) for admin_id in os.environ.get("ADMIN_IDS", "123456789").split(",")]
+# معرفات المشرفين الأدمن (تم دمج آيدي الخاص بك)
+ADMIN_IDS = [8557464787]
 PRIMARY_ADMIN_USERNAME = os.environ.get("PRIMARY_ADMIN_USERNAME", "@AdminUsername")
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -331,7 +331,7 @@ def webhook():
                 if not forced_bots: 
                     send_telegram_message(chat_id, "⚠ لا توجد بوتات مسجلة.")
                 else:
-                    buttons = [[{"text": f"🗑️️ حذف {b['name']}", "callback_data": f"remove_bot_{b['name']}"}] for b in forced_bots]
+                    buttons = [[{"text": f"🗑 حذف {b['name']}", "callback_data": f"remove_bot_{b['name']}"}] for b in forced_bots]
                     send_telegram_message(chat_id, "🗑 اختر البوت المراد حذفه:", reply_markup={"inline_keyboard": buttons})
             elif data.startswith("remove_bot_"):
                 b_name_del = data.replace("remove_bot_", "")
@@ -415,7 +415,7 @@ def webhook():
                 elif state == "waiting_bot_url":
                     temp_bot_data[chat_id] = {"url": text.strip()}
                     admin_states[chat_id] = "waiting_bot_name"
-                    send_telegram_message(chat_id, "✍️ أرسل الاسم الذي سيظهر للمستخدم كمميز في قائمة البوتات الإجبارية:")
+                    send_telegram_message(chat_id, "✍️️ أرسل الاسم الذي سيظهر للمستخدم كمميز في قائمة البوتات الإجبارية:")
                 elif state == "waiting_bot_name":
                     admin_states.pop(chat_id, None)
                     b_url = temp_bot_data.pop(chat_id, {}).get("url", "")
@@ -538,7 +538,7 @@ def webhook():
                 }
                 requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
                     "chat_id": chat_id,
-                    "text": f"👋 أهلاً بك يا مشرف البوت (`{BOT_USERNAME}`).\nلديك صلاحيات كاملة لإدارة البوت والطلبات المعلقة.",
+                    "text": f"👋 أهلاً بك يا مشرف البوت.\nلديك صلاحيات كاملة لإدارة البوت والطلبات المعلقة.",
                     "reply_markup": admin_kb,
                     "parse_mode": "Markdown"
                 })
@@ -598,7 +598,7 @@ def webhook():
             ver_users = cursor.fetchone()["verified"]
             cursor.close()
             db.close()
-            send_telegram_message(chat_id, f"📊 **إحصائيات بوت {BOT_USERNAME}:**\n\n👥 إجمالي المستخدمين: `{tot_users}`\n✅ المستخدمون الموثقون: `{ver_users}`")
+            send_telegram_message(chat_id, f"📊 **إحصائيات البوت:**\n\n👥 إجمالي المستخدمين: `{tot_users}`\n✅ المستخدمون الموثقون: `{ver_users}`")
             return "OK", 200
 
         elif text == "📞 الدعم الفني":
