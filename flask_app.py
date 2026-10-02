@@ -68,7 +68,7 @@ init_db()
 
 # متغيرات النظام المؤقتة
 bot_settings = {
-    "referral_reward": 0.5,
+    "referral_reward": 0.01,
     "min_withdrawal": 0.01
 }
 
