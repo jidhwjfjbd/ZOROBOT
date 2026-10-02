@@ -29,8 +29,8 @@ try:
 except Exception:
     pass
 
-# استخدام قاعدة بيانات PostgreSQL السحابية (Supabase)
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:Iae7UdzXxVaRSRVA@db.kqiybhwjllvzytjpfyj.supabase.co:5432/postgres")
+# قراءة رابط قاعدة البيانات حصرياً من متغيرات البيئة لمنع أي تضارب
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def init_db():
     conn = psycopg2.connect(DATABASE_URL)
