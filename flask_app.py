@@ -121,7 +121,7 @@ def get_next_pending_task(chat_id):
     if chat_id in ADMIN_IDS:
         return "done", None
 
-    progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bot_idx": 0, "bot_repeat_count": 0, "bot_clicks": {}})
+    progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
 
     if forced_channels and not progress["channels_done"]:
         missing_channels = []
@@ -141,14 +141,13 @@ def get_next_pending_task(chat_id):
     else:
         progress["channels_done"] = True
 
-    if forced_bots and progress["bot_idx"] < len(forced_bots):
-        b_idx = progress["bot_idx"]
-        current_bot = forced_bots[b_idx]
-        repeat_target = current_bot.get("repeat_target", 3) 
+    if forced_bots and not progress["bots_done"]:
+        target_repeats = 6  
         current_repeats = progress.get("bot_repeat_count", 0)
-        
-        if current_repeats < repeat_target:
-            return "bot", {"bot": current_bot, "idx": b_idx, "current": current_repeats + 1, "total": repeat_target}
+        if current_repeats < target_repeats:
+            return "bots_all", forced_bots
+        else:
+            progress["bots_done"] = True
 
     if chat_id not in verified_users:
         return "webapp", None
@@ -166,18 +165,15 @@ def send_next_task_prompt(chat_id):
         buttons.append([{"text": "✅ تحقق من الاشتراك", "callback_data": "check_next_task"}])
         requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "⚠️ **الخطوة الأولى:** يجب عليك الانضمام إلى القنوات التالية أولاً للاستمرار:", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
 
-    elif task_type == "bot":
-        b_info = data["bot"]
-        b_idx = data["idx"]
-        bot_url = b_info["url"]
-        if not bot_url.startswith("http"):
-            bot_url = f"https://t.me/{b_info['url'].replace('@', '')}"
-        
-        buttons = [
-            [{"text": f"🤖 تسجيل في بوت: {b_info['name']}", "url": bot_url}],
-            [{"text": "✅ تحقق من التسجيل", "callback_data": f"click_bot_{b_idx}"}]
-        ]
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"🤖 **مهمة البوت ({data['current']}/{data['total']}):**\n\nيجب التسجيل في البوت أولاً ثم الضغط على زر التحقق.", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
+    elif task_type == "bots_all":
+        buttons = []
+        for b_info in data:
+            b_url = b_info["url"]
+            if not b_url.startswith("http"):
+                b_url = f"https://t.me/{b_info['url'].replace('@', '')}"
+            buttons.append([{"text": f"🤖 تسجيل في بوت: {b_info['name']}", "url": b_url}])
+        buttons.append([{"text": "✅ تحقق من التسجيل", "callback_data": "click_all_bots"}])
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🤖 **مهام البوتات الإجبارية:**\n\nيجب التسجيل في جميع البوتات أعلاه أولاً ثم الضغط على زر التحقق أدناه للمتابعة.", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
 
     elif task_type == "webapp":
         render_domain = os.environ.get("RENDER_EXTERNAL_URL", "https://zorobot-qbm3.onrender.com")
@@ -196,7 +192,6 @@ def send_next_task_prompt(chat_id):
                     send_telegram_message(referrer_id, f"🎉 سجل @{new_user_username} الدخول للبوت عبر رابطك واجتاز شروط التحقق والمهام بنجاح! حصلت على `{reward} TON`.")
         
         send_main_menu(chat_id, "✨ تمت كافة خطوات التحقق بنجاح وأصبح حسابك مفعلاً بالكامل!")
-
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
@@ -211,7 +206,7 @@ def check_status():
         pass
     
     t_type, _ = get_next_pending_task(user_id)
-    has_pending = True if (forced_channels or forced_bots) and t_type in ["channel", "bot"] else False
+    has_pending = True if (forced_channels or forced_bots) and t_type in ["channel", "bots_all"] else False
     return jsonify({'has_pending_tasks': has_pending})
 
 @app.route('/verify', methods=['POST'])
@@ -256,27 +251,6 @@ def verify():
 
     return jsonify({'success': True})
 
-# الدالة المساعدة لإرسال الرسائل في الخاص
-def send_telegram_message(chat_id, text, reply_markup=None, parse_mode="Markdown"):
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    try:
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload)
-    except Exception:
-        pass
-
-def send_main_menu(chat_id, text):
-    # شكل القائمة الرئيسية الخاصة بك
-    reply_keyboard = {
-        "keyboard": [
-            [{"text": "🎁 رابط الإحالة"}, {"text": "💎 رصيدي والسحب"}],
-            [{"text": "💳 ربط المحفظة"}, {"text": "📊 إحصائيات البوت"}],
-            [{"text": "📞 الدعم الفني"}]
-        ],
-        "resize_keyboard": True
-    }
-    send_telegram_message(chat_id, text, reply_markup=reply_keyboard)
 def execute_broadcast(admin_id):
     b_data = broadcast_data.get(admin_id)
     if not b_data: 
@@ -329,7 +303,6 @@ def webhook():
     if not update: 
         return "OK", 200
 
-    # 🛑 منع البوت تماماً من العمل أو الرد داخل المجموعات أو القروبات العامة
     if "message" in update:
         chat_type = update["message"]["chat"].get("type", "private")
         if chat_type in ["group", "supergroup"]:
@@ -422,17 +395,13 @@ def webhook():
             send_next_task_prompt(chat_id)
             return "OK", 200
 
-        if chat_id not in ADMIN_IDS and data.startswith("click_bot_"):
-            b_idx = int(data.replace("click_bot_", ""))
-            progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bot_idx": 0, "bot_repeat_count": 0, "bot_clicks": {}})
-            
+        if chat_id not in ADMIN_IDS and data == "click_all_bots":
+            progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
             progress["bot_repeat_count"] = progress.get("bot_repeat_count", 0) + 1
-            current_bot = forced_bots[b_idx]
-            target_repeats = current_bot.get("repeat_target", 3)
             
+            target_repeats = 6
             if progress["bot_repeat_count"] >= target_repeats:
-                progress["bot_idx"] += 1
-                progress["bot_repeat_count"] = 0
+                progress["bots_done"] = True
             
             send_next_task_prompt(chat_id)
             return "OK", 200
@@ -446,7 +415,7 @@ def webhook():
         all_bot_users.add(chat_id)
         user_last_active[chat_id] = time.time()
         
-        user_task_progress.setdefault(chat_id, {"channels_done": False, "bot_idx": 0, "bot_repeat_count": 0, "bot_clicks": {}})["username"] = username
+        user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})["username"] = username
 
         if text == "🔙 العودة للقائمة الرئيسية":
             user_states.pop(chat_id, None)
@@ -487,7 +456,7 @@ def webhook():
                 admin_states.pop(chat_id, None)
                 b_url = temp_bot_data.pop(chat_id, {}).get("url", "")
                 b_name = text.strip()
-                forced_bots.append({"name": b_name, "url": b_url, "repeat_target": 3})
+                forced_bots.append({"name": b_name, "url": b_url})
                 user_task_progress.clear()
                 send_telegram_message(chat_id, f"✅ تم إضافة البوت `{b_name}` بنجاح ليظهر لجميع المستخدمين.")
             return "OK", 200
@@ -556,7 +525,7 @@ def webhook():
             bal = 999999.0 if chat_id in ADMIN_IDS else user_balances.get(chat_id, 0.0)
             min_w = bot_settings["min_withdrawal"]
             user_states[chat_id] = "waiting_withdrawal_amount"
-            send_telegram_message(chat_id, f"💎 رصيدك الحالي: `{bal:.2f} TON`\n⚠️ **الحد الأدنى للسحب هو:** `{min_w} TON`\n\n✍️️ أدخل المبلغ المراد سحبه الآن:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
+            send_telegram_message(chat_id, f"💎 رصيدك الحالي: `{bal:.2f} TON`\n⚠️ **الحد الأدنى للسحب هو:** `{min_w} TON`\n\n✍ أدخل المبلغ المراد سحبه الآن:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
         elif text == "💳 ربط المحفظة":
             user_states[chat_id] = "waiting_wallet"
             send_telegram_message(chat_id, f"💳 أرسل عنوان محفظة TON الخاصة بك:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
