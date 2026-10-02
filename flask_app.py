@@ -1,4 +1,4 @@
-import os
+Import os
 import requests
 import time
 import hashlib
@@ -150,7 +150,7 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
-def get_next_pending_task(chat_id):
+Def get_next_pending_task(chat_id):
     if chat_id in ADMIN_IDS:
         return "done", None
 
@@ -430,6 +430,26 @@ def webhook():
         cursor = db.cursor(cursor_factory=RealDictCursor)
 
         if chat_id in ADMIN_IDS:
+            if data == "check_pending_withdrawals":
+                cursor.execute("SELECT * FROM pending_withdrawals")
+                pend_rows = cursor.fetchall()
+                if not pend_rows:
+                    send_telegram_message(chat_id, "✅ لا توجد أي طلبات سحب معلقة حالياً.")
+                else:
+                    send_telegram_message(chat_id, f"📦 لديك `{len(pend_rows)}` طلب سحب معلق:")
+                    for req in pend_rows:
+                        w_id, u_id, amount, wallet, username = req["w_id"], req["user_id"], req["amount"], req["wallet"], req["username"]
+                        kb = {"inline_keyboard": [[{"text": "✅ قبول", "callback_data": f"approve_w_{w_id}"}, {"text": "❌ رفض", "callback_data": f"reject_w_{w_id}"}]]}
+                        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
+                            "chat_id": chat_id, 
+                            "text": f"📌 **طلب معلق:**\n👤 User: @{username}\n🆔 Chat ID: `{u_id}`\n💎 Amount: `{amount} TON`\n💳 Wallet: `{wallet}`", 
+                            "reply_markup": kb, 
+                            "parse_mode": "Markdown"
+                        })
+                cursor.close()
+                db.close()
+                return "OK", 200
+
             if data.startswith("approve_w_") or data.startswith("reject_w_"):
                 parts = data.split("_")
                 action, w_id = parts[0], parts[2]
@@ -442,7 +462,6 @@ def webhook():
 
                     if action == "approve":
                         current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        
                         proof_text = f"💎 **Gram Payment Successful!**\n\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` TON\n📥 المحفظة: `{wallet}`\n⏰ التوقيت: `{current_time_str}`\n🔗 TX: `{tx_hash}`\n■ Status: ✅ Successful"
                         requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": PROOF_CHANNEL_ID, "text": proof_text, "parse_mode": "Markdown"})
                         
@@ -488,7 +507,7 @@ def webhook():
                 send_telegram_message(chat_id, "🤖 أرسل رابط البوت أو رابط الميني أب (Mini App):")
             elif data == "del_bot":
                 if not forced_bots: 
-                    send_telegram_message(chat_id, "⚠️ لا توجد بوتات مسجلة.")
+                    send_telegram_message(chat_id, "⚠️️ لا توجد بوتات مسجلة.")
                 else:
                     buttons = [[{"text": f"🗑️ حذف {b['name']}", "callback_data": f"remove_bot_{b['name']}"}] for b in forced_bots]
                     send_telegram_message(chat_id, "🗑 اختر البوت المراد حذفه:", reply_markup={"inline_keyboard": buttons})
@@ -512,7 +531,7 @@ def webhook():
             progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
             progress["bot_repeat_count"] = progress.get("bot_repeat_count", 0) + 1
             
-            target_repeats = 4  # تم التعديل إلى 4 مرات
+            target_repeats = 4 
             if progress["bot_repeat_count"] >= target_repeats:
                 progress["bots_done"] = True
             
@@ -585,159 +604,7 @@ def webhook():
             db.close()
             return "OK", 200
 
+
         if chat_id in user_states:
             state = user_states.pop(chat_id, None)
-            if state == "waiting_wallet":
-                wallet_text = text.strip()
-                cursor.execute("UPDATE users SET wallet = %s WHERE chat_id = %s", (wallet_text, chat_id))
-                db.commit()
-                cursor.close()
-                db.close()
-                send_main_menu(chat_id, f"✅ تم حفظ محفظة TON:\n`{wallet_text}`")
-            elif state == "waiting_withdrawal_amount":
-                cursor.execute("SELECT * FROM pending_withdrawals WHERE user_id = %s", (chat_id,))
-                has_pend = cursor.fetchone()
-                if has_pend:
-                    cursor.close()
-                    db.close()
-                    send_main_menu(chat_id, "⚠ لديك طلب سحب قيد المراجعة بالفعل.")
-                else:
-                    try:
-                        amount = float(text.strip())
-                        cursor.execute("SELECT balance, wallet FROM users WHERE chat_id = %s", (chat_id,))
-                        u_data = cursor.fetchone()
-                        bal = 999999.0 if chat_id in ADMIN_IDS else (u_data["balance"] if u_data else 0.0)
-                        wallet = u_data["wallet"] if u_data else None
-
-                        if amount < bot_settings["min_withdrawal"] or amount > bal:
-                            cursor.close()
-                            db.close()
-                            send_main_menu(chat_id, f"❌ المبلغ غير صالح أو أقل من الحد الأدنى (`{bot_settings['min_withdrawal']} TON`) أو رصيدك لا يكفي.")
-                        elif not wallet:
-                            cursor.close()
-                            db.close()
-                            send_main_menu(chat_id, "⚠ يجب ربط محفظة TON أولاً!")
-                        else:
-                            if chat_id not in ADMIN_IDS:
-                                cursor.execute("UPDATE users SET balance = balance - %s WHERE chat_id = %s", (amount, chat_id))
-                            
-                            w_id = str(int(time.time())) + str(chat_id)[-4:]
-                            tx_hash = hashlib.sha256(w_id.encode()).hexdigest()[:32]
-                            cursor.execute("INSERT INTO pending_withdrawals (w_id, user_id, amount, wallet, username, tx_hash) VALUES (%s, %s, %s, %s, %s, %s)", (w_id, chat_id, amount, wallet, username, tx_hash))
-                            db.commit()
-                            cursor.close()
-                            db.close()
-
-                            kb = {"inline_keyboard": [[{"text": "✅ قبول", "callback_data": f"approve_w_{w_id}"}, {"text": "❌ رفض", "callback_data": f"reject_w_{w_id}"}]]}
-                            for aid in ADMIN_IDS:
-                                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": aid, "text": f"💸 طلب سحب جديد:\n👤 User: @{username}\n💎 Amount: `{amount} TON`\n💳 Wallet: `{wallet}`", "reply_markup": kb, "parse_mode": "Markdown"})
-                            send_main_menu(chat_id, f"🎉 تم تقديم طلب السحب بنجاح بقيمة `{amount} TON` وهو قيد المراجعة.")
-                    except ValueError:
-                        cursor.close()
-                        db.close()
-                        send_main_menu(chat_id, "❌ قيمة غير صالحة.")
-            return "OK", 200
-
-        if text.startswith("/start"):
-            parts = text.split()
-            if len(parts) > 1 and parts[1].isdigit():
-                ref_id = int(parts[1])
-                if ref_id != chat_id:
-                    cursor.execute("SELECT invited_by FROM users WHERE chat_id = %s", (chat_id,))
-                    u_row = cursor.fetchone()
-                    if u_row and not u_row["invited_by"]:
-                        cursor.execute("UPDATE users SET invited_by = %s WHERE chat_id = %s", (ref_id, chat_id))
-                        db.commit()
-            
-            cursor.close()
-            db.close()
-            task_type, _ = get_next_pending_task(chat_id)
-            if task_type != "done":
-                send_next_task_prompt(chat_id)
-                return "OK", 200
-
-            db_chk = get_db()
-            cur_chk = db_chk.cursor(cursor_factory=RealDictCursor)
-            cur_chk.execute("SELECT verified FROM users WHERE chat_id = %s", (chat_id,))
-            chk_row = cur_chk.fetchone()
-            cur_chk.close()
-            db_chk.close()
-            is_v = chk_row["verified"] if chk_row else 0
-
-            if chat_id in ADMIN_IDS or is_v:
-                send_main_menu(chat_id, "أهلاً بك مجدداً 👋")
-            else:
-                send_next_task_prompt(chat_id)
-            return "OK", 200
-
-        cursor.close()
-        db.close()
-        if chat_id not in ADMIN_IDS:
-            task_type, _ = get_next_pending_task(chat_id)
-            if task_type != "done": 
-                send_next_task_prompt(chat_id)
-                return "OK", 200
-
-        if text == "🎁 رابط الإحالة":
-            db_ref = get_db()
-            cur_ref = db_ref.cursor(cursor_factory=RealDictCursor)
-            cur_ref.execute("SELECT COUNT(*) as cnt FROM referrals WHERE referrer_id = %s", (chat_id,))
-            ref_count = cur_ref.fetchone()["cnt"]
-            cur_ref.close()
-            db_ref.close()
-
-            reward_val = bot_settings["referral_reward"]
-            send_main_menu(chat_id, f"🎁 رابط الإحالة الخاص بك:\n`https://t.me/{BOT_USERNAME}?start={chat_id}`\n\n💰 **سعر الإحالة:** `{reward_val} TON` لكل شخص يقوم بالانضمام وتخطّي المهام والتحقق الكامل.\nعدد إحالاتك الناجحة: `{ref_count}`")
-        elif text == "💎 رصيدي والسحب":
-            db_bal = get_db()
-            cur_bal = db_bal.cursor(cursor_factory=RealDictCursor)
-            cur_bal.execute("SELECT balance FROM users WHERE chat_id = %s", (chat_id,))
-            u_b = cur_bal.fetchone()
-            cur_bal.close()
-            db_bal.close()
-
-            bal = 999999.0 if chat_id in ADMIN_IDS else (u_b["balance"] if u_b else 0.0)
-            min_w = bot_settings["min_withdrawal"]
-            user_states[chat_id] = "waiting_withdrawal_amount"
-            send_telegram_message(chat_id, f"💎 رصيدك الحالي: `{bal:.2f} TON`\n⚠️ **الحد الأدنى للسحب هو:** `{min_w} TON`\n\n✍ أدخل المبلغ المراد سحبه الآن:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
-        elif text == "💳 ربط المحفظة":
-            user_states[chat_id] = "waiting_wallet"
-            send_telegram_message(chat_id, f"💳 أرسل عنوان محفظة TON الخاصة بك:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
-        elif text == "📊 إحصائيات البوت":
-            db_st = get_db()
-            cur_st = db_st.cursor(cursor_factory=RealDictCursor)
-            cur_st.execute("SELECT COUNT(*) as cnt FROM users")
-            total_users = cur_st.fetchone()["cnt"]
-
-            cur_st.execute("SELECT referrer_id, COUNT(*) as ref_cnt FROM referrals GROUP BY referrer_id ORDER BY ref_cnt DESC LIMIT 5")
-            top_refs = cur_st.fetchall()
-            
-            top_text = ""
-            for idx, r in enumerate(top_refs, 1):
-                top_text += f"{idx}. مستخدم بمعرف (`{r['referrer_id']}`) - عدد الإحالات: `{r['ref_cnt']}`\n"
-            if not top_text:
-                top_text = "لا توجد إحالات مسجلة بعد."
-
-            if chat_id in ADMIN_IDS:
-                current_time = time.time()
-                cur_st.execute("SELECT COUNT(*) as cnt FROM users WHERE %s - last_active < 86400", (current_time,))
-                active_count = cur_st.fetchone()["cnt"]
-                
-                cur_st.execute("SELECT COUNT(*) as cnt FROM users WHERE wallet IS NOT NULL AND wallet != ''")
-                wallet_bound = cur_st.fetchone()["cnt"]
-                wallet_unbound = total_users - wallet_bound
-                
-                stats_msg = f"📊 **إحصائيات البوت الشاملة (للأدمن):**\n\n👥 إجمالي المستخدمين: `{total_users}`\n🔥 المستخدمين النشطين (آخر 24 ساعة): `{active_count}`\n💳 من ربطوا محفظتهم: `{wallet_bound}`\n⏳ من لم يربطوا محفظتهم: `{wallet_unbound}`\n\n🏆 **أفضل 5 مستخدمين في الإحالات:**\n{top_text}"
-            else:
-                stats_msg = f"📊 **إحصائيات البوت:**\n\n👥 إجمالي المستخدمين: `{total_users}`\n\n🏆 **أفضل 5 مستخدمين:**\n{top_text}"
-            cur_st.close()
-            db_st.close()
-            send_main_menu(chat_id, stats_msg)
-        elif text == "📞 الدعم الفني":
-            send_main_menu(chat_id, f"📞 للتواصل مع الدعم الفني:\n👉 {PRIMARY_ADMIN_USERNAME}")
-
-    return "OK", 200
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+            ...
