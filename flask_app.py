@@ -2,7 +2,8 @@ import os
 import requests
 import time
 import hashlib
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime
 
@@ -28,32 +29,34 @@ try:
 except Exception:
     pass
 
-# تهيئة قاعدة بيانات SQLite لحفظ البيانات بشكل دائم
+# استخدام قاعدة بيانات PostgreSQL السحابية (Supabase)
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:Iae7UdzXxVaRSRVA@db.kqiybhwjllvzytjpfyj.supabase.co:5432/postgres")
+
 def init_db():
-    conn = sqlite3.connect('bot_database.db', check_same_thread=False)
+    conn = psycopg2.connect(DATABASE_URL)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
-                        chat_id INTEGER PRIMARY KEY,
+                        chat_id BIGINT PRIMARY KEY,
                         username TEXT,
                         balance REAL DEFAULT 0.0,
                         wallet TEXT,
                         verified INTEGER DEFAULT 0,
                         banned INTEGER DEFAULT 0,
-                        invited_by INTEGER,
-                        last_active REAL
+                        invited_by BIGINT,
+                        last_active DOUBLE PRECISION
                     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS fingerprints (
                         fingerprint TEXT PRIMARY KEY,
-                        chat_id INTEGER
+                        chat_id BIGINT
                     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS referrals (
-                        referrer_id INTEGER,
-                        referred_id INTEGER,
+                        referrer_id BIGINT,
+                        referred_id BIGINT,
                         PRIMARY KEY (referrer_id, referred_id)
                     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS pending_withdrawals (
                         w_id TEXT PRIMARY KEY,
-                        user_id INTEGER,
+                        user_id BIGINT,
                         amount REAL,
                         wallet TEXT,
                         username TEXT,
@@ -64,13 +67,13 @@ def init_db():
                         value TEXT
                     )''')
     conn.commit()
+    cursor.close()
     conn.close()
 
 init_db()
 
 def get_db():
-    conn = sqlite3.connect('bot_database.db', check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(DATABASE_URL)
     return conn
 
 forced_channels = []  
@@ -147,7 +150,6 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
-
 def get_next_pending_task(chat_id):
     if chat_id in ADMIN_IDS:
         return "done", None
@@ -173,7 +175,7 @@ def get_next_pending_task(chat_id):
         progress["channels_done"] = True
 
     if forced_bots and not progress["bots_done"]:
-        target_repeats = 6  
+        target_repeats = 4  # تم التعديل إلى 4 مرات
         current_repeats = progress.get("bot_repeat_count", 0)
         if current_repeats < target_repeats:
             return "bots_all", forced_bots
@@ -181,9 +183,10 @@ def get_next_pending_task(chat_id):
             progress["bots_done"] = True
 
     db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT verified FROM users WHERE chat_id = ?", (chat_id,))
+    cursor = db.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT verified FROM users WHERE chat_id = %s", (chat_id,))
     row = cursor.fetchone()
+    cursor.close()
     db.close()
     
     is_verified = row["verified"] if row else 0
@@ -219,35 +222,35 @@ def send_next_task_prompt(chat_id):
 
     elif task_type == "done":
         db = get_db()
-        cursor = db.cursor()
-        cursor.execute("SELECT verified, invited_bzy FROM users WHERE chat_id = ?", (chat_id,))
-        # Let's check verified state safely
-        cursor.execute("SELECT verified FROM users WHERE chat_id = ?", (chat_id,))
+        cursor = db.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT verified FROM users WHERE chat_id = %s", (chat_id,))
         row = cursor.fetchone()
         is_verified = row["verified"] if row else 0
 
         if not is_verified and chat_id not in ADMIN_IDS:
-            cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = ?", (chat_id,))
-            cursor.execute("SELECT invited_by FROM users WHERE chat_id = ?", (chat_id,))
+            cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = %s", (chat_id,))
+            cursor.execute("SELECT invited_by FROM users WHERE chat_id = %s", (chat_id,))
             u_row = cursor.fetchone()
             db.commit()
             
             if u_row and u_row["invited_by"]:
                 referrer_id = u_row["invited_by"]
                 if referrer_id != chat_id:
-                    cursor.execute("SELECT 1 FROM referrals WHERE referrer_id = ? AND referred_id = ?", (referrer_id, chat_id))
+                    cursor.execute("SELECT 1 FROM referrals WHERE referrer_id = %s AND referred_id = %s", (referrer_id, chat_id))
                     if not cursor.fetchone():
                         reward = bot_settings["referral_reward"]
-                        cursor.execute("UPDATE users SET balance = balance + ? WHERE chat_id = ?", (reward, referrer_id))
-                        cursor.execute("INSERT OR IGNORE INTO referrals (referrer_id, referred_id) VALUES (?, ?)", (referrer_id, chat_id))
+                        cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (reward, referrer_id))
+                        cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (referrer_id, chat_id))
                         db.commit()
                         
-                        cursor.execute("SELECT username FROM users WHERE chat_id = ?", (chat_id,))
+                        cursor.execute("SELECT username FROM users WHERE chat_id = %s", (chat_id,))
                         ref_user_row = cursor.fetchone()
                         new_user_username = ref_user_row["username"] if ref_user_row and ref_user_row["username"] else "مستخدم جديد"
                         send_telegram_message(referrer_id, f"🎉 سجل @{new_user_username} الدخول للبوت عبر رابطك واجتاز شروط التحقق والمهام بنجاح! حصلت على `{reward} TON`.")
+        cursor.close()
         db.close()
         send_main_menu(chat_id, "✨ تمت كافة خطوات التحقق بنجاح وأصبح حسابك مفعلاً بالكامل!")
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
@@ -277,61 +280,65 @@ def verify():
         pass
     
     db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT banned FROM users WHERE chat_id = ?", (user_id,))
+    cursor = db.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT banned FROM users WHERE chat_id = %s", (user_id,))
     row = cursor.fetchone()
     if row and row["banned"] == 1:
+        cursor.close()
         db.close()
         return jsonify({'success': False, 'message': '🚫 محظور!'}), 403
 
-    cursor.execute("INSERT OR IGNORE INTO users (chat_id, balance, verified, banned, last_active) VALUES (?, 0.0, 0, 0, ?)", (user_id, time.time()))
-    cursor.execute("UPDATE users SET last_active = ? WHERE chat_id = ?", (time.time(), user_id))
+    cursor.execute("INSERT INTO users (chat_id, balance, verified, banned, last_active) VALUES (%s, 0.0, 0, 0, %s) ON CONFLICT (chat_id) DO UPDATE SET last_active = EXCLUDED.last_active", (user_id, time.time()))
     db.commit()
 
     if user_id in ADMIN_IDS:
-        cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = ?", (user_id,))
+        cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = %s", (user_id,))
         db.commit()
+        cursor.close()
         db.close()
         return jsonify({'success': True})
 
-    cursor.execute("SELECT chat_id FROM fingerprints WHERE fingerprint = ?", (fingerprint,))
+    cursor.execute("SELECT chat_id FROM fingerprints WHERE fingerprint = %s", (fingerprint,))
     f_row = cursor.fetchone()
     if f_row and f_row["chat_id"] != user_id:
-        cursor.execute("UPDATE users SET banned = 1 WHERE chat_id = ?", (user_id,))
+        cursor.execute("UPDATE users SET banned = 1 WHERE chat_id = %s", (user_id,))
         db.commit()
+        cursor.close()
         db.close()
         return jsonify({'success': False, 'message': '🚫 تم حظرك نهائياً لمخالفة سياسة الحساب الواحد!'}), 403
     
-    cursor.execute("INSERT OR REPLACE INTO fingerprints (fingerprint, chat_id) VALUES (?, ?)", (fingerprint, user_id))
+    cursor.execute("INSERT INTO fingerprints (fingerprint, chat_id) VALUES (%s, %s) ON CONFLICT (fingerprint) DO UPDATE SET chat_id = EXCLUDED.chat_id", (fingerprint, user_id))
     db.commit()
     
     if forced_channels or forced_bots:
         task_type, _ = get_next_pending_task(user_id)
         if task_type != "done" and task_type != "webapp":
+            cursor.close()
             db.close()
             return jsonify({'success': False, 'message': '⚠️ يجب إكمال القنوات والبوتات أولاً!'}), 400
 
-    cursor.execute("SELECT verified FROM users WHERE chat_id = ?", (user_id,))
+    cursor.execute("SELECT verified FROM users WHERE chat_id = %s", (user_id,))
     v_row = cursor.fetchone()
     is_already_verified = v_row["verified"] if v_row else 0
 
-    cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = ?", (user_id,))
+    cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = %s", (user_id,))
     db.commit()
     
     if not is_already_verified:
-        cursor.execute("SELECT invited_by FROM users WHERE chat_id = ?", (user_id,))
+        cursor.execute("SELECT invited_by FROM users WHERE chat_id = %s", (user_id,))
         u_row = cursor.fetchone()
         if u_row and u_row["invited_by"]:
             referrer_id = u_row["invited_by"]
             if referrer_id != user_id:
-                cursor.execute("SELECT 1 FROM referrals WHERE referrer_id = ? AND referred_id = ?", (referrer_id, user_id))
+                cursor.execute("SELECT 1 FROM referrals WHERE referrer_id = %s AND referred_id = %s", (referrer_id, user_id))
                 if not cursor.fetchone():
                     reward = bot_settings["referral_reward"]
-                    cursor.execute("UPDATE users SET balance = balance + ? WHERE chat_id = ?", (reward, referrer_id))
-                    cursor.execute("INSERT OR IGNORE INTO referrals (referrer_id, referred_id) VALUES (?, ?)", (referrer_id, user_id))
+                    cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (reward, referrer_id))
+                    cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (referrer_id, user_id))
                     db.commit()
                     send_telegram_message(referrer_id, f"🎉 شخص ما انضم عبر رابط إحالتك وأتم التحقق بنجاح! حصلت على `{reward} TON`.")
 
+    cursor.close()
     db.close()
     return jsonify({'success': True})
 
@@ -340,9 +347,10 @@ def execute_broadcast(admin_id):
     if not b_msg: 
         return
     db = get_db()
-    cursor = db.cursor()
+    cursor = db.cursor(cursor_factory=RealDictCursor)
     cursor.execute("SELECT chat_id FROM users")
     users = cursor.fetchall()
+    cursor.close()
     db.close()
 
     success = 0
@@ -419,21 +427,20 @@ def webhook():
             pass
 
         db = get_db()
-        cursor = db.cursor()
+        cursor = db.cursor(cursor_factory=RealDictCursor)
 
         if chat_id in ADMIN_IDS:
             if data.startswith("approve_w_") or data.startswith("reject_w_"):
                 parts = data.split("_")
                 action, w_id = parts[0], parts[2]
-                cursor.execute("SELECT * FROM pending_withdrawals WHERE w_id = ?", (w_id,))
+                cursor.execute("SELECT * FROM pending_withdrawals WHERE w_id = %s", (w_id,))
                 w_row = cursor.fetchone()
                 if w_row:
                     u_id, amount, wallet, username, tx_hash = w_row["user_id"], w_row["amount"], w_row["wallet"], w_row["username"], w_row["tx_hash"]
-                    cursor.execute("DELETE FROM pending_withdrawals WHERE w_id = ?", (w_id,))
+                    cursor.execute("DELETE FROM pending_withdrawals WHERE w_id = %s", (w_id,))
                     db.commit()
 
                     if action == "approve":
-                        cursor.execute("SELECT COUNT(*) as cnt FROM pending_withdrawals") # or global counter
                         current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         
                         proof_text = f"💎 **Gram Payment Successful!**\n\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` TON\n📥 المحفظة: `{wallet}`\n⏰ التوقيت: `{current_time_str}`\n🔗 TX: `{tx_hash}`\n■ Status: ✅ Successful"
@@ -445,10 +452,11 @@ def webhook():
                         requests.post(f"{TELEGRAM_API_URL}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": f"✅ **تم قبول السحب ونشره في القناة:**\n\n{proof_text}", "parse_mode": "Markdown"})
                     elif action == "reject":
                         if u_id not in ADMIN_IDS: 
-                            cursor.execute("UPDATE users SET balance = balance + ? WHERE chat_id = ?", (amount, u_id))
+                            cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (amount, u_id))
                             db.commit()
                         send_telegram_message(u_id, f"❌ **عذراً، تم رفض طلب سحبك (`{amount} TON`) وتم إرجاع الرصيد لحسابك.**")
                         requests.post(f"{TELEGRAM_API_URL}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": "❌ **تم رفض الطلب واسترجاع الرصيد.**", "parse_mode": "Markdown"})
+                cursor.close()
                 db.close()
                 return "OK", 200
 
@@ -490,10 +498,12 @@ def webhook():
                 send_telegram_message(chat_id, f"✅ تم حذف البوت بنجاح.")
             elif data == "confirm_broadcast":
                 execute_broadcast(chat_id)
+            cursor.close()
             db.close()
             return "OK", 200
 
         if chat_id not in ADMIN_IDS and data == "check_next_task":
+            cursor.close()
             db.close()
             send_next_task_prompt(chat_id)
             return "OK", 200
@@ -502,14 +512,16 @@ def webhook():
             progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
             progress["bot_repeat_count"] = progress.get("bot_repeat_count", 0) + 1
             
-            target_repeats = 6
+            target_repeats = 4  # تم التعديل إلى 4 مرات
             if progress["bot_repeat_count"] >= target_repeats:
                 progress["bots_done"] = True
             
+            cursor.close()
             db.close()
             send_next_task_prompt(chat_id)
             return "OK", 200
 
+        cursor.close()
         db.close()
         return "OK", 200
 
@@ -519,9 +531,8 @@ def webhook():
         username = msg["from"].get("username") or f"user_{chat_id}"
         
         db = get_db()
-        cursor = db.cursor()
-        cursor.execute("INSERT OR IGNORE INTO users (chat_id, username, balance, verified, banned, last_active) VALUES (?, ?, 0.0, 0, 0, ?)", (chat_id, username, time.time()))
-        cursor.execute("UPDATE users SET username = ?, last_active = ? WHERE chat_id = ?", (username, time.time(), chat_id))
+        cursor = db.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("INSERT INTO users (chat_id, username, balance, verified, banned, last_active) VALUES (%s, %s, 0.0, 0, 0, %s) ON CONFLICT (chat_id) DO UPDATE SET username = EXCLUDED.username, last_active = EXCLUDED.last_active", (chat_id, username, time.time()))
         db.commit()
 
         user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})["username"] = username
@@ -529,6 +540,7 @@ def webhook():
         if text == "🔙 العودة للقائمة الرئيسية":
             user_states.pop(chat_id, None)
             admin_states.pop(chat_id, None)
+            cursor.close()
             db.close()
             task_type, _ = get_next_pending_task(chat_id)
             if task_type != "done":
@@ -569,6 +581,7 @@ def webhook():
                 forced_bots.append({"name": b_name, "url": b_url})
                 user_task_progress.clear()
                 send_telegram_message(chat_id, f"✅ تم إضافة البوت `{b_name}` بنجاح ليظهر لجميع المستخدمين.")
+            cursor.close()
             db.close()
             return "OK", 200
 
@@ -576,38 +589,43 @@ def webhook():
             state = user_states.pop(chat_id, None)
             if state == "waiting_wallet":
                 wallet_text = text.strip()
-                cursor.execute("UPDATE users SET wallet = ? WHERE chat_id = ?", (wallet_text, chat_id))
+                cursor.execute("UPDATE users SET wallet = %s WHERE chat_id = %s", (wallet_text, chat_id))
                 db.commit()
+                cursor.close()
                 db.close()
                 send_main_menu(chat_id, f"✅ تم حفظ محفظة TON:\n`{wallet_text}`")
             elif state == "waiting_withdrawal_amount":
-                cursor.execute("SELECT * FROM pending_withdrawals WHERE user_id = ?", (chat_id,))
+                cursor.execute("SELECT * FROM pending_withdrawals WHERE user_id = %s", (chat_id,))
                 has_pend = cursor.fetchone()
                 if has_pend:
+                    cursor.close()
                     db.close()
                     send_main_menu(chat_id, "⚠ لديك طلب سحب قيد المراجعة بالفعل.")
                 else:
                     try:
                         amount = float(text.strip())
-                        cursor.execute("SELECT balance, wallet FROM users WHERE chat_id = ?", (chat_id,))
+                        cursor.execute("SELECT balance, wallet FROM users WHERE chat_id = %s", (chat_id,))
                         u_data = cursor.fetchone()
                         bal = 999999.0 if chat_id in ADMIN_IDS else (u_data["balance"] if u_data else 0.0)
                         wallet = u_data["wallet"] if u_data else None
 
                         if amount < bot_settings["min_withdrawal"] or amount > bal:
+                            cursor.close()
                             db.close()
                             send_main_menu(chat_id, f"❌ المبلغ غير صالح أو أقل من الحد الأدنى (`{bot_settings['min_withdrawal']} TON`) أو رصيدك لا يكفي.")
                         elif not wallet:
+                            cursor.close()
                             db.close()
-                            send_main_menu(chat_id, "⚠️ يجب ربط محفظة TON أولاً!")
+                            send_main_menu(chat_id, "⚠ يجب ربط محفظة TON أولاً!")
                         else:
                             if chat_id not in ADMIN_IDS:
-                                cursor.execute("UPDATE users SET balance = balance - ? WHERE chat_id = ?", (amount, chat_id))
+                                cursor.execute("UPDATE users SET balance = balance - %s WHERE chat_id = %s", (amount, chat_id))
                             
                             w_id = str(int(time.time())) + str(chat_id)[-4:]
                             tx_hash = hashlib.sha256(w_id.encode()).hexdigest()[:32]
-                            cursor.execute("INSERT INTO pending_withdrawals (w_id, user_id, amount, wallet, username, tx_hash) VALUES (?, ?, ?, ?, ?, ?)", (w_id, chat_id, amount, wallet, username, tx_hash))
+                            cursor.execute("INSERT INTO pending_withdrawals (w_id, user_id, amount, wallet, username, tx_hash) VALUES (%s, %s, %s, %s, %s, %s)", (w_id, chat_id, amount, wallet, username, tx_hash))
                             db.commit()
+                            cursor.close()
                             db.close()
 
                             kb = {"inline_keyboard": [[{"text": "✅ قبول", "callback_data": f"approve_w_{w_id}"}, {"text": "❌ رفض", "callback_data": f"reject_w_{w_id}"}]]}
@@ -615,6 +633,7 @@ def webhook():
                                 requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": aid, "text": f"💸 طلب سحب جديد:\n👤 User: @{username}\n💎 Amount: `{amount} TON`\n💳 Wallet: `{wallet}`", "reply_markup": kb, "parse_mode": "Markdown"})
                             send_main_menu(chat_id, f"🎉 تم تقديم طلب السحب بنجاح بقيمة `{amount} TON` وهو قيد المراجعة.")
                     except ValueError:
+                        cursor.close()
                         db.close()
                         send_main_menu(chat_id, "❌ قيمة غير صالحة.")
             return "OK", 200
@@ -624,12 +643,13 @@ def webhook():
             if len(parts) > 1 and parts[1].isdigit():
                 ref_id = int(parts[1])
                 if ref_id != chat_id:
-                    cursor.execute("SELECT invited_by FROM users WHERE chat_id = ?", (chat_id,))
+                    cursor.execute("SELECT invited_by FROM users WHERE chat_id = %s", (chat_id,))
                     u_row = cursor.fetchone()
                     if u_row and not u_row["invited_by"]:
-                        cursor.execute("UPDATE users SET invited_by = ? WHERE chat_id = ?", (ref_id, chat_id))
+                        cursor.execute("UPDATE users SET invited_by = %s WHERE chat_id = %s", (ref_id, chat_id))
                         db.commit()
             
+            cursor.close()
             db.close()
             task_type, _ = get_next_pending_task(chat_id)
             if task_type != "done":
@@ -637,9 +657,10 @@ def webhook():
                 return "OK", 200
 
             db_chk = get_db()
-            cur_chk = db_chk.cursor()
-            cur_chk.execute("SELECT verified FROM users WHERE chat_id = ?", (chat_id,))
+            cur_chk = db_chk.cursor(cursor_factory=RealDictCursor)
+            cur_chk.execute("SELECT verified FROM users WHERE chat_id = %s", (chat_id,))
             chk_row = cur_chk.fetchone()
+            cur_chk.close()
             db_chk.close()
             is_v = chk_row["verified"] if chk_row else 0
 
@@ -649,6 +670,7 @@ def webhook():
                 send_next_task_prompt(chat_id)
             return "OK", 200
 
+        cursor.close()
         db.close()
         if chat_id not in ADMIN_IDS:
             task_type, _ = get_next_pending_task(chat_id)
@@ -658,18 +680,20 @@ def webhook():
 
         if text == "🎁 رابط الإحالة":
             db_ref = get_db()
-            cur_ref = db_ref.cursor()
-            cur_ref.execute("SELECT COUNT(*) as cnt FROM referrals WHERE referrer_id = ?", (chat_id,))
+            cur_ref = db_ref.cursor(cursor_factory=RealDictCursor)
+            cur_ref.execute("SELECT COUNT(*) as cnt FROM referrals WHERE referrer_id = %s", (chat_id,))
             ref_count = cur_ref.fetchone()["cnt"]
+            cur_ref.close()
             db_ref.close()
 
             reward_val = bot_settings["referral_reward"]
             send_main_menu(chat_id, f"🎁 رابط الإحالة الخاص بك:\n`https://t.me/{BOT_USERNAME}?start={chat_id}`\n\n💰 **سعر الإحالة:** `{reward_val} TON` لكل شخص يقوم بالانضمام وتخطّي المهام والتحقق الكامل.\nعدد إحالاتك الناجحة: `{ref_count}`")
         elif text == "💎 رصيدي والسحب":
             db_bal = get_db()
-            cur_bal = db_bal.cursor()
-            cur_bal.execute("SELECT balance FROM users WHERE chat_id = ?", (chat_id,))
+            cur_bal = db_bal.cursor(cursor_factory=RealDictCursor)
+            cur_bal.execute("SELECT balance FROM users WHERE chat_id = %s", (chat_id,))
             u_b = cur_bal.fetchone()
+            cur_bal.close()
             db_bal.close()
 
             bal = 999999.0 if chat_id in ADMIN_IDS else (u_b["balance"] if u_b else 0.0)
@@ -681,7 +705,7 @@ def webhook():
             send_telegram_message(chat_id, f"💳 أرسل عنوان محفظة TON الخاصة بك:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
         elif text == "📊 إحصائيات البوت":
             db_st = get_db()
-            cur_st = db_st.cursor()
+            cur_st = db_st.cursor(cursor_factory=RealDictCursor)
             cur_st.execute("SELECT COUNT(*) as cnt FROM users")
             total_users = cur_st.fetchone()["cnt"]
 
@@ -696,7 +720,7 @@ def webhook():
 
             if chat_id in ADMIN_IDS:
                 current_time = time.time()
-                cur_st.execute("SELECT COUNT(*) as cnt FROM users WHERE ? - last_active < 86400", (current_time,))
+                cur_st.execute("SELECT COUNT(*) as cnt FROM users WHERE %s - last_active < 86400", (current_time,))
                 active_count = cur_st.fetchone()["cnt"]
                 
                 cur_st.execute("SELECT COUNT(*) as cnt FROM users WHERE wallet IS NOT NULL AND wallet != ''")
@@ -706,6 +730,7 @@ def webhook():
                 stats_msg = f"📊 **إحصائيات البوت الشاملة (للأدمن):**\n\n👥 إجمالي المستخدمين: `{total_users}`\n🔥 المستخدمين النشطين (آخر 24 ساعة): `{active_count}`\n💳 من ربطوا محفظتهم: `{wallet_bound}`\n⏳ من لم يربطوا محفظتهم: `{wallet_unbound}`\n\n🏆 **أفضل 5 مستخدمين في الإحالات:**\n{top_text}"
             else:
                 stats_msg = f"📊 **إحصائيات البوت:**\n\n👥 إجمالي المستخدمين: `{total_users}`\n\n🏆 **أفضل 5 مستخدمين:**\n{top_text}"
+            cur_st.close()
             db_st.close()
             send_main_menu(chat_id, stats_msg)
         elif text == "📞 الدعم الفني":
