@@ -765,18 +765,20 @@ def webhook():
 
         elif text == "💎 رصيدي والسحب":
             cursor.execute("SELECT balance, wallet FROM users WHERE chat_id = %s", (chat_id,))
-            u = cursor.fetchone()
-            bal = u["balance"] if u else 0.0
-            wal = u["wallet"] if u and u["wallet"] else "غير محددة ❌"
+            urow = cursor.fetchone()
             cursor.close()
             db.close()
             
-            kb = {
-                "inline_keyboard": [
-                    [{"text": "💸 طلب سحب الأرباح", "callback_data": "request_withdrawal"}]
-                ]
-            }
-            send_telegram_message(chat_id, f"💎 **معلومات حسابك المالية:**\n\n💰 رصيدك الحالي: `{bal} TON`\n💳 المحفظة المرتبطة: `{wal}`\n\n💸 الحد الأدنى للسحب: `{bot_settings['min_withdrawal']} TON`", reply_markup=kb)
+            if not urow or not urow["wallet"]:
+                send_telegram_message(chat_id, "⚠️ يجب عليك ربط محفظتك أولاً عبر زر '💳 ربط المحفظة' قبل طلب السحب.")
+                return "OK", 200
+            
+            if urow["balance"] < bot_settings["min_withdrawal"]:
+                send_telegram_message(chat_id, f"❌ عذراً، رصيدك الحالي (`{urow['balance']} TON`) أقل من الحد الأدنى للسحب (`{bot_settings['min_withdrawal']} TON`).")
+                return "OK", 200
+
+            user_states[chat_id] = "waiting_withdraw_amount"
+            send_telegram_message(chat_id, f"💸 **طلب سحب الأرباح:**\n\nرصيدك المتاح: `{urow['balance']} TON`\nالحد الأدنى: `{bot_settings['min_withdrawal']} TON`\n\n✍️ أرسل الآن الكمية التي تريد سحبها:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
             return "OK", 200
 
         elif text == "💳 ربط المحفظة":
@@ -825,7 +827,7 @@ def webhook():
                 return "OK", 200
 
             user_states[chat_id] = "waiting_withdraw_amount"
-            send_telegram_message(chat_id, f"💸 **طلب سحب الأرباح:**\n\nرصيدك المتاح: `{urow['balance']} TON`\nالحد الأدنى: `{bot_settings['min_withdrawal']} TON`\n\n✍️ أرسل الآن الكمية التي تريد سحبها:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
+            send_telegram_message(chat_id, f"💸 **طلب سحب الأرباح:**\n\nرصيدك المتاح: `{urow['balance']} TON`\nالحد الأدنى: `{bot_settings['min_withdrawal']} TON`\n\n✍️️ أرسل الآن الكمية التي تريد سحبها:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
             return "OK", 200
 
     return "OK", 200
