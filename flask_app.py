@@ -256,14 +256,19 @@ def verify():
 
     return jsonify({'success': True})
 def execute_broadcast(admin_id):
-    b_data = broadcast_data.get(admin_id)
-    if not b_data: 
+    b_msg = broadcast_data.get(admin_id)
+    if not b_msg: 
         return
     success = 0
     for uid in list(all_bot_users):
         try:
-            if b_data.get("type") == "text":
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": uid, "text": b_data["text"], "parse_mode": "Markdown"})
+            # نسخ الرسالة الأصلية المرسلة من الأدمن مباشرة بكل محتوياتها (صور، فيديوهات، نصوص، ملفات...) إلى المستخدمين
+            res = requests.post(f"{TELEGRAM_API_URL}/copyMessage", json={
+                "chat_id": uid,
+                "from_chat_id": admin_id,
+                "message_id": b_msg
+            })
+            if res.json().get("ok"):
                 success += 1
         except Exception: 
             pass
@@ -343,7 +348,7 @@ def webhook():
 
             if data == "start_broadcast":
                 admin_states[chat_id] = "waiting_broadcast"
-                send_telegram_message(chat_id, "📢 أرسل محتوى رسالة الإذاعة الجماعية (تدعم الماركداون):")
+                send_telegram_message(chat_id, "📢 أرسل الآن المنشور المراد إذاعته (يمكنك إرسال: نص، صورة، فيديو، ملف، أو أي شيء مع التنسيق):")
             elif data == "set_ref_reward": 
                 admin_states[chat_id] = "waiting_ref_reward"
                 send_telegram_message(chat_id, "✍️ أدخل سعر الإحالة الجديد:")
@@ -425,8 +430,14 @@ def webhook():
             state = admin_states[chat_id]
             if state == "waiting_broadcast":
                 admin_states.pop(chat_id, None)
-                broadcast_data[chat_id] = {"type": "text", "text": text}
-                send_telegram_message(chat_id, "هل تريد تأكيد إرسال الإذاعة لجميع المستخدمين؟", reply_markup={"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]})
+                broadcast_data[chat_id] = msg["message_id"] # حفظ معرف رسالة الأدمن أياً كانت (صورة، نص، فيديو...)
+                
+                # معاينة سريعة للأدمن للتأكيد
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
+                    "chat_id": chat_id, 
+                    "text": "📌 معاينة الرسالة المراد إرسالها بالأعلى.\nهل تريد تأكيد إرسالها لجميع المستخدمين؟",
+                    "reply_markup": {"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]}
+                })
             elif state == "waiting_ref_reward":
                 admin_states.pop(chat_id, None)
                 bot_settings["referral_reward"] = float(text.strip())
