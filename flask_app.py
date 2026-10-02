@@ -7,11 +7,12 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "ضع_توكن_البوت_هنا")
+# تم تعيين البيانات الخاصة بك مباشرة هنا
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "7963385287:AAH0pWb-Yn70WbWqGjE90P7O0h57W82K6Zc") # استبدله بالتوكن الفعلي إذا لزم الأمر
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "ضع_معرف_البوت_بدون_علاقة")
-ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "ايدي_الأدمن").split(",")]
-PRIMARY_ADMIN_USERNAME = os.environ.get("PRIMARY_ADMIN_USERNAME", "@Admin")
+BOT_USERNAME = "freemoneytgffbot"
+ADMIN_IDS = [8667934765, 8557464787]
+PRIMARY_ADMIN_USERNAME = "@Admin"
 PROOF_CHANNEL_ID = os.environ.get("PROOF_CHANNEL_ID", "-100xxxxxxx")
 
 # قواعد البيانات في الذاكرة
@@ -262,7 +263,7 @@ def webhook():
                 send_telegram_message(chat_id, "📢 أرسل الآن المنشور المراد إذاعته (صورة، نص، فيديو، أو ملف):")
             elif data == "set_ref_reward": 
                 admin_states[chat_id] = "waiting_ref_reward"
-                send_telegram_message(chat_id, "✍️️ أدخل سعر الإحالة الجديد:")
+                send_telegram_message(chat_id, "✍ أدخل سعر الإحالة الجديد:")
             elif data == "set_min_withdrawal": 
                 admin_states[chat_id] = "waiting_min_withdrawal"
                 send_telegram_message(chat_id, "✍️ أدخل الحد الأدنى للسحب الجديد:")
@@ -285,7 +286,7 @@ def webhook():
                 send_telegram_message(chat_id, "🤖 أرسل رابط البوت أو الميني أب (Mini App):")
             elif data == "del_bot":
                 if not forced_bots: 
-                    send_telegram_message(chat_id, "⚠️️ لا توجد بوتات مسجلة.")
+                    send_telegram_message(chat_id, "⚠ لا توجد بوتات مسجلة.")
                 else:
                     buttons = [[{"text": f"🗑️ حذف {b['name']}", "callback_data": f"remove_bot_{b['name']}"}] for b in forced_bots]
                     send_telegram_message(chat_id, "🗑 اختر البوت المراد حذفه:", reply_markup={"inline_keyboard": buttons})
