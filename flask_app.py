@@ -81,7 +81,7 @@ user_task_progress = {}
 admin_states = {}
 user_states = {}      
 temp_bot_data = {}    
-broadcast_data = {}   
+broadcast_data = {}
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
