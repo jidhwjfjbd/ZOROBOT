@@ -14,7 +14,10 @@ ADMIN_IDS = [8667934765, 8557464787]
 PRIMARY_ADMIN_USERNAME = "@sig2siel"
 PROOF_CHANNEL_ID = "@Proofsofbotwithdrawal"
 
-# الإعدادات الافتراضية للسحب والإحالة (0.01)
+# المفتاح السري المخصص لوحة تحكم الويب الخاصة بطلبات السحب
+ADMIN_WEB_KEY = "zoro_admin_secure_123"
+
+# الإعدادات الافتراضية للسحب والإحالة
 bot_settings = {
     "referral_reward": 0.01,
     "min_withdrawal": 0.01
@@ -62,10 +65,6 @@ def init_db():
                         username TEXT,
                         tx_hash TEXT
                     )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS settings (
-                        key TEXT PRIMARY KEY,
-                        value TEXT
-                    )''')
     conn.commit()
     cursor.close()
     conn.close()
@@ -82,163 +81,6 @@ admin_states = {}
 user_states = {}      
 temp_bot_data = {}    
 broadcast_data = {}
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ZORO Security - نظام التحقق</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/fingerprintjs2/2.1.4/fingerprint2.min.js"></script>
-    <style>
-        * { box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
-        .card { background: #1e293b; padding: 30px 24px; border-radius: 20px; text-align: center; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5); width: 100%; max-width: 380px; border: 1px solid #334155; }
-        .btn { background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); color: white; border: none; padding: 14px; border-radius: 12px; font-size: 16px; font-weight: bold; width: 100%; cursor: pointer; margin-bottom: 12px; }
-        .warning-box { background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; color: #fca5a5; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; display: none; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>نظام حماية ZORO</h2>
-        <p style="color: #94a3b8; font-size: 14px; margin-bottom: 20px;">قم بتأكيد بصمة جهازك لتنشيط الحساب نهائياً.</p>
-        <button id="verifyBtn" class="btn" onclick="processVerification()">تأكيد الهوية والجهاز ✨</button>
-        <div id="channels-warning" class="warning-box">⚠️ يجب إكمال القنوات والبوتات أولاً!</div>
-        <div id="status" style="margin-top:15px; font-size:14px; font-weight:600;"></div>
-    </div>
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
-        
-        fetch('/check_status', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 0 })
-        }).then(res => res.json()).then(data => {
-            if (data.has_pending_tasks) {
-                document.getElementById('channels-warning').style.display = 'block';
-            } else {
-                document.getElementById('channels-warning').style.display = 'none';
-            }
-        }).catch(() => {});
-
-        function processVerification() {
-            Fingerprint2.get((components) => {
-                const values = components.map((pair) => pair.value);
-                const hash = Fingerprint2.x64hash128(values.join(''), 31);
-                const user = tg.initDataUnsafe.user || { id: 0 };
-                fetch('/verify', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_id: user.id, fingerprint: hash })
-                }).then(res => res.json()).then(data => {
-                    if (data.success) { 
-                        document.getElementById('status').style.color = '#34d399';
-                        document.getElementById('status').innerText = "✅ تم التحقق بنجاح!"; 
-                        setTimeout(() => tg.close(), 1200); 
-                    } else { 
-                        document.getElementById('status').style.color = '#f87171';
-                        document.getElementById('status').innerText = data.message || "❌ خطأ!"; 
-                    }
-                });
-            });
-        }
-    </script>
-</body>
-</html>
-"""
-
-@app.route('/')
-def index():
-    return render_template_string(HTML_TEMPLATE)
-
-@app.route('/check_status', methods=['POST'])
-def check_status():
-    data = request.json or {}
-    user_id = data.get('user_id', 0)
-    try:
-        user_id = int(user_id)
-    except ValueError:
-        pass
-    
-    t_type, _ = get_next_pending_task(user_id)
-    has_pending = True if (forced_channels or forced_bots) and t_type in ["channel", "bots_all"] else False
-    return jsonify({'has_pending_tasks': has_pending})
-
-@app.route('/verify', methods=['POST'])
-def verify():
-    data = request.json or {}
-    user_id, fingerprint = data.get('user_id'), data.get('fingerprint')
-    if not user_id or not fingerprint: 
-        return jsonify({'success': False}), 400
-    try: 
-        user_id = int(user_id)
-    except ValueError: 
-        pass
-    
-    db = get_db()
-    cursor = db.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT banned FROM users WHERE chat_id = %s", (user_id,))
-    row = cursor.fetchone()
-    if row and row["banned"] == 1:
-        cursor.close()
-        db.close()
-        return jsonify({'success': False, 'message': '🚫 محظور!'}), 403
-
-    cursor.execute("INSERT INTO users (chat_id, balance, verified, banned, last_active) VALUES (%s, 0.0, 0, 0, %s) ON CONFLICT (chat_id) DO UPDATE SET last_active = EXCLUDED.last_active", (user_id, time.time()))
-    db.commit()
-
-    if user_id in ADMIN_IDS:
-        cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = %s", (user_id,))
-        db.commit()
-        cursor.close()
-        db.close()
-        return jsonify({'success': True})
-
-    cursor.execute("SELECT chat_id FROM fingerprints WHERE fingerprint = %s", (fingerprint,))
-    f_row = cursor.fetchone()
-    if f_row and f_row["chat_id"] != user_id:
-        cursor.execute("UPDATE users SET banned = 1 WHERE chat_id = %s", (user_id,))
-        db.commit()
-        cursor.close()
-        db.close()
-        return jsonify({'success': False, 'message': '🚫 تم حظرك نهائياً لمخالفة سياسة الحساب الواحد!'}), 403
-    
-    cursor.execute("INSERT INTO fingerprints (fingerprint, chat_id) VALUES (%s, %s) ON CONFLICT (fingerprint) DO UPDATE SET chat_id = EXCLUDED.chat_id", (fingerprint, user_id))
-    db.commit()
-    
-    if forced_channels or forced_bots:
-        task_type, _ = get_next_pending_task(user_id)
-        if task_type != "done" and task_type != "webapp":
-            cursor.close()
-            db.close()
-            return jsonify({'success': False, 'message': '⚠️ يجب إكمال القنوات والبوتات أولاً!'}), 400
-
-    cursor.execute("SELECT verified FROM users WHERE chat_id = %s", (user_id,))
-    v_row = cursor.fetchone()
-    is_already_verified = v_row["verified"] if v_row else 0
-
-    cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = %s", (user_id,))
-    db.commit()
-    
-    if not is_already_verified:
-        cursor.execute("SELECT invited_by FROM users WHERE chat_id = %s", (user_id,))
-        u_row = cursor.fetchone()
-        if u_row and u_row["invited_by"]:
-            referrer_id = u_row["invited_by"]
-            if referrer_id != user_id:
-                cursor.execute("SELECT 1 FROM referrals WHERE referrer_id = %s AND referred_id = %s", (referrer_id, user_id))
-                if not cursor.fetchone():
-                    reward = bot_settings["referral_reward"]
-                    cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (reward, referrer_id))
-                    cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (referrer_id, user_id))
-                    db.commit()
-                    send_telegram_message(referrer_id, f"🎉 شخص ما انضم عبر رابط إحالتك وأتم التحقق بنجاح! حصلت على `{reward} TON`.")
-
-    cursor.close()
-    db.close()
-    return jsonify({'success': True})
 def get_next_pending_task(chat_id):
     if chat_id in ADMIN_IDS:
         return "done", None
@@ -378,14 +220,13 @@ def send_main_menu(chat_id, text):
     if chat_id in ADMIN_IDS:
         admin_inline = {
             "inline_keyboard": [
-                [{"text": "📦 طلبات السحب المعلقة", "callback_data": "check_pending_withdrawals"}],
                 [{"text": "📢 إذاعة جماعية", "callback_data": "start_broadcast"}],
                 [{"text": "💰 تعديل الإحالة", "callback_data": "set_ref_reward"}, {"text": "💸 تعديل السحب", "callback_data": "set_min_withdrawal"}],
                 [{"text": "📢 إضافة قناة", "callback_data": "add_channel"}, {"text": "🗑 حذف قناة", "callback_data": "del_channel"}],
                 [{"text": "🤖 إضافة بوت", "callback_data": "add_bot"}, {"text": "🗑️ حذف بوت", "callback_data": "del_bot"}]
             ]
         }
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "📂 **لوحة التحكم الإدارية:**", "parse_mode": "Markdown", "reply_markup": admin_inline})
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "📂 **لوحة التحكم الإدارية (البوت):**\nملاحظة: طلبات السحب يتم إدارتها الآن عبر موقع الويب الخاص بك.", "parse_mode": "Markdown", "reply_markup": admin_inline})
     send_telegram_message(chat_id, text, reply_markup=reply_keyboard)
 
 def send_telegram_message(chat_id, text, reply_markup=None, parse_mode="Markdown"):
@@ -396,6 +237,295 @@ def send_telegram_message(chat_id, text, reply_markup=None, parse_mode="Markdown
         requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload)
     except Exception: 
         pass
+
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZORO Security - نظام التحقق</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fingerprintjs2/2.1.4/fingerprint2.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
+        .card { background: #1e293b; padding: 30px 24px; border-radius: 20px; text-align: center; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5); width: 100%; max-width: 380px; border: 1px solid #334155; }
+        .btn { background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); color: white; border: none; padding: 14px; border-radius: 12px; font-size: 16px; font-weight: bold; width: 100%; cursor: pointer; margin-bottom: 12px; }
+        .warning-box { background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; color: #fca5a5; padding: 10px; border-radius: 8px; font-size: 13px; margin-top: 10px; display: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>نظام حماية ZORO</h2>
+        <p style="color: #94a3b8; font-size: 14px; margin-bottom: 20px;">قم بتأكيد بصمة جهازك لتنشيط الحساب نهائياً.</p>
+        <button id="verifyBtn" class="btn" onclick="processVerification()">تأكيد الهوية والجهاز ✨</button>
+        <div id="channels-warning" class="warning-box">⚠️ يجب إكمال القنوات والبوتات أولاً!</div>
+        <div id="status" style="margin-top:15px; font-size:14px; font-weight:600;"></div>
+    </div>
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        
+        fetch('/check_status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 0 })
+        }).then(res => res.json()).then(data => {
+            if (data.has_pending_tasks) {
+                document.getElementById('channels-warning').style.display = 'block';
+            } else {
+                document.getElementById('channels-warning').style.display = 'none';
+            }
+        }).catch(() => {});
+
+        function processVerification() {
+            Fingerprint2.get((components) => {
+                const values = components.map((pair) => pair.value);
+                const hash = Fingerprint2.x64hash128(values.join(''), 31);
+                const user = tg.initDataUnsafe.user || { id: 0 };
+                fetch('/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: user.id, fingerprint: hash })
+                }).then(res => res.json()).then(data => {
+                    if (data.success) { 
+                        document.getElementById('status').style.color = '#34d399';
+                        document.getElementById('status').innerText = "✅ تم التحقق بنجاح!"; 
+                        setTimeout(() => tg.close(), 1200); 
+                    } else { 
+                        document.getElementById('status').style.color = '#f87171';
+                        document.getElementById('status').innerText = data.message || "❌ خطأ!"; 
+                    }
+                });
+            });
+        }
+    </script>
+</body>
+</html>
+"""
+
+ADMIN_DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لوحة تحكم المشرف - طلبات السحب</title>
+    <style>
+        body { font-family: Tahoma, sans-serif; background: #0f172a; color: #fff; padding: 20px; margin: 0; }
+        .container { max-width: 1000px; margin: auto; }
+        h2 { text-align: center; color: #38bdf8; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #1e293b; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        th, td { padding: 12px 15px; text-align: center; border-bottom: 1px solid #334155; font-size: 14px; }
+        th { background: #334155; color: #f8fafc; }
+        .btn-approve { background: #22c55e; color: white; border: none; padding: 8px 14px; cursor: pointer; border-radius: 6px; font-weight: bold; }
+        .btn-reject { background: #ef4444; color: white; border: none; padding: 8px 14px; cursor: pointer; border-radius: 6px; font-weight: bold; }
+        .btn-approve:hover { background: #16a34a; }
+        .btn-reject:hover { background: #dc2626; }
+        .no-data { text-align: center; padding: 30px; color: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>📦 لوحة إدارة طلبات السحب (ZoroBot)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>المستخدم</th>
+                    <th>المعرف (ID)</th>
+                    <th>الكمية</th>
+                    <th>المحفظة</th>
+                    <th>الإجراء</th>
+                </tr>
+            </thead>
+            <tbody id="requests-table">
+                {% for req in requests %}
+                <tr id="row-{{ req.w_id }}">
+                    <td>@{{ req.username }}</td>
+                    <td><code>{{ req.user_id }}</code></td>
+                    <td style="color: #34d399; font-weight: bold;">{{ req.amount }} TON</td>
+                    <td style="word-break: break-all; max-width: 250px;">{{ req.wallet }}</td>
+                    <td>
+                        <button class="btn-approve" onclick="processReq('{{ req.w_id }}', 'approve')">قبول</button>
+                        <button class="btn-reject" onclick="processReq('{{ req.w_id }}', 'reject')">رفض</button>
+                    </td>
+                </tr>
+                {% else %}
+                <tr id="no-requests-row"><td colspan="5" class="no-data">✅ لا توجد أي طلبات سحب معلقة حالياً.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const adminKey = "{{ key }}";
+        function processReq(wId, action) {
+            fetch('/admin/dashboard/process?key=' + encodeURIComponent(adminKey), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ w_id: wId, action: action })
+            }).then(res => res.json()).then(data => {
+                if(data.success) {
+                    const row = document.getElementById('row-' + wId);
+                    if(row) row.remove();
+                } else {
+                    alert('❌ حدث خطأ أو انتهت الصلاحية');
+                }
+            }).catch(() => {
+                alert('❌ فشل الاتصال بالخادم');
+            });
+        }
+    </script>
+</body>
+</html>
+"""
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/admin/dashboard')
+def admin_dashboard():
+    key = request.args.get('key')
+    if key != ADMIN_WEB_KEY:
+        return "<h2 style='color:red; text-align:center; margin-top:50px;'>🚫 عذراً، غير مسموح بالدخول. المفتاح السري غير صحيح.</h2>", 403
+    
+    db = get_db()
+    cursor = db.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT * FROM pending_withdrawals")
+    reqs = cursor.fetchall()
+    cursor.close()
+    db.close()
+    return render_template_string(ADMIN_DASHBOARD_HTML, requests=reqs, key=key)
+
+@app.route('/admin/dashboard/process', methods=['POST'])
+def admin_dashboard_process():
+    key = request.args.get('key')
+    if key != ADMIN_WEB_KEY:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+
+    data = request.json or {}
+    w_id = data.get('w_id')
+    action = data.get('action')
+    
+    if not w_id or not action:
+        return jsonify({'success': False}), 400
+
+    db = get_db()
+    cursor = db.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT * FROM pending_withdrawals WHERE w_id = %s", (w_id,))
+    w_row = cursor.fetchone()
+    
+    if not w_row:
+        cursor.close()
+        db.close()
+        return jsonify({'success': False}), 404
+
+    u_id, amount, wallet, username, tx_hash = w_row["user_id"], w_row["amount"], w_row["wallet"], w_row["username"], w_row["tx_hash"]
+    cursor.execute("DELETE FROM pending_withdrawals WHERE w_id = %s", (w_id,))
+    db.commit()
+
+    if action == "approve":
+        current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        proof_text = f"💎 **Gram Payment Successful!**\n\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` TON\n📥 المحفظة: `{wallet}`\n⏰ التوقيت: `{current_time_str}`\n🔗 TX: `{tx_hash}`\n■ Status: ✅ Successful"
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": PROOF_CHANNEL_ID, "text": proof_text, "parse_mode": "Markdown"})
+        send_telegram_message(u_id, f"🎉 **تم قبول طلب السحب الخاص بك بنجاح!**\n\n👤 اليوزر: @{username}\n💵 الكمية: `{amount} TON`\n⏰ التوقيت: `{current_time_str}`")
+    elif action == "reject":
+        if u_id not in ADMIN_IDS: 
+            cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (amount, u_id))
+            db.commit()
+        send_telegram_message(u_id, f"❌ **عذراً، تم رفض طلب سحبك (`{amount} TON`) وتم إرجاع الرصيد لحسابك.**")
+
+    cursor.close()
+    db.close()
+    return jsonify({'success': True})
+
+@app.route('/check_status', methods=['POST'])
+def check_status():
+    data = request.json or {}
+    user_id = data.get('user_id', 0)
+    try:
+        user_id = int(user_id)
+    except ValueError:
+        pass
+    
+    t_type, _ = get_next_pending_task(user_id)
+    has_pending = True if (forced_channels or forced_bots) and t_type in ["channel", "bots_all"] else False
+    return jsonify({'has_pending_tasks': has_pending})
+
+@app.route('/verify', methods=['POST'])
+def verify():
+    data = request.json or {}
+    user_id, fingerprint = data.get('user_id'), data.get('fingerprint')
+    if not user_id or not fingerprint: 
+        return jsonify({'success': False}), 400
+    try: 
+        user_id = int(user_id)
+    except ValueError: 
+        pass
+    
+    db = get_db()
+    cursor = db.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT banned FROM users WHERE chat_id = %s", (user_id,))
+    row = cursor.fetchone()
+    if row and row["banned"] == 1:
+        cursor.close()
+        db.close()
+        return jsonify({'success': False, 'message': '🚫 محظور!'}), 403
+
+    cursor.execute("INSERT INTO users (chat_id, balance, verified, banned, last_active) VALUES (%s, 0.0, 0, 0, %s) ON CONFLICT (chat_id) DO UPDATE SET last_active = EXCLUDED.last_active", (user_id, time.time()))
+    db.commit()
+
+    if user_id in ADMIN_IDS:
+        cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = %s", (user_id,))
+        db.commit()
+        cursor.close()
+        db.close()
+        return jsonify({'success': True})
+
+    cursor.execute("SELECT chat_id FROM fingerprints WHERE fingerprint = %s", (fingerprint,))
+    f_row = cursor.fetchone()
+    if f_row and f_row["chat_id"] != user_id:
+        cursor.execute("UPDATE users SET banned = 1 WHERE chat_id = %s", (user_id,))
+        db.commit()
+        cursor.close()
+        db.close()
+        return jsonify({'success': False, 'message': '🚫 تم حظرك نهائياً لمخالفة سياسة الحساب الواحد!'}), 403
+    
+    cursor.execute("INSERT INTO fingerprints (fingerprint, chat_id) VALUES (%s, %s) ON CONFLICT (fingerprint) DO UPDATE SET chat_id = EXCLUDED.chat_id", (fingerprint, user_id))
+    db.commit()
+    
+    if forced_channels or forced_bots:
+        task_type, _ = get_next_pending_task(user_id)
+        if task_type != "done" and task_type != "webapp":
+            cursor.close()
+            db.close()
+            return jsonify({'success': False, 'message': '⚠️ يجب إكمال القنوات والبوتات أولاً!'}), 400
+
+    cursor.execute("SELECT verified FROM users WHERE chat_id = %s", (user_id,))
+    v_row = cursor.fetchone()
+    is_already_verified = v_row["verified"] if v_row else 0
+
+    cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = %s", (user_id,))
+    db.commit()
+    
+    if not is_already_verified:
+        cursor.execute("SELECT invited_by FROM users WHERE chat_id = %s", (user_id,))
+        u_row = cursor.fetchone()
+        if u_row and u_row["invited_by"]:
+            referrer_id = u_row["invited_by"]
+            if referrer_id != user_id:
+                cursor.execute("SELECT 1 FROM referrals WHERE referrer_id = %s AND referred_id = %s", (referrer_id, user_id))
+                if not cursor.fetchone():
+                    reward = bot_settings["referral_reward"]
+                    cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (reward, referrer_id))
+                    cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (referrer_id, user_id))
+                    db.commit()
+                    send_telegram_message(referrer_id, f"🎉 شخص ما انضم عبر رابط إحالتك وأتم التحقق بنجاح! حصلت على `{reward} TON`.")
+
+    cursor.close()
+    db.close()
+    return jsonify({'success': True})
 @app.route('/webhook', methods=['POST'])
 def webhook():
     global forced_bots, forced_channels
@@ -406,8 +536,16 @@ def webhook():
     if "message" in update:
         chat_type = update["message"]["chat"].get("type", "private")
         if chat_type in ["group", "supergroup"]:
-            # السماح بالاستماع للرسائل في مجموعة المشرفين أو التفاعل مع الأزرار
-            pass
+            return "OK", 200
+
+    if "callback_query" in update:
+        chat_type = update["callback_query"]["message"]["chat"].get("type", "private")
+        if chat_type in ["group", "supergroup"]:
+            try:
+                requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": update["callback_query"]["id"]})
+            except Exception:
+                pass
+            return "OK", 200
 
     if "callback_query" in update:
         cb = update["callback_query"]
@@ -420,108 +558,56 @@ def webhook():
         db = get_db()
         cursor = db.cursor(cursor_factory=RealDictCursor)
 
-        ADMIN_GROUP_ID = -5481087779
-
-        # التحقق إذا كانت الضغطة صادرة من مجموعة المشرفين أو أحد الأدمنية المعتمدين
-        if chat_id == ADMIN_GROUP_ID or chat_id in ADMIN_IDS:
-            if data == "check_pending_withdrawals":
-                cursor.execute("SELECT * FROM pending_withdrawals")
-                pend_rows = cursor.fetchall()
-                if not pend_rows:
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✅ لا توجد أي طلبات سحب معلقة حالياً."})
-                else:
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"📦 لديك `{len(pend_rows)}` طلب سحب معلق:"})
-                    for req in pend_rows:
-                        w_id, u_id, amount, wallet, username = req["w_id"], req["user_id"], req["amount"], req["wallet"], req["username"]
-                        kb = {"inline_keyboard": [[{"text": "✅ قبول", "callback_data": f"approve_w_{w_id}"}, {"text": "❌ رفض", "callback_data": f"reject_w_{w_id}"}]]}
-                        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
-                            "chat_id": chat_id, 
-                            "text": f"📌 **طلب معلق:**\n👤 User: @{username}\n🆔 Chat ID: `{u_id}`\n💎 Amount: `{amount} TON`\n💳 Wallet: `{wallet}`", 
-                            "reply_markup": kb, 
-                            "parse_mode": "Markdown"
-                        })
-                cursor.close()
-                db.close()
-                return "OK", 200
-
-            if data.startswith("approve_w_") or data.startswith("reject_w_"):
-                parts = data.split("_")
-                action, w_id = parts[0], parts[2]
-                cursor.execute("SELECT * FROM pending_withdrawals WHERE w_id = %s", (w_id,))
-                w_row = cursor.fetchone()
-                if w_row:
-                    u_id, amount, wallet, username, tx_hash = w_row["user_id"], w_row["amount"], w_row["wallet"], w_row["username"], w_row["tx_hash"]
-                    cursor.execute("DELETE FROM pending_withdrawals WHERE w_id = %s", (w_id,))
-                    db.commit()
-
-                    if action == "approve":
-                        current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        proof_text = f"💎 **Gram Payment Successful!**\n\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` TON\n📥 المحفظة: `{wallet}`\n⏰ التوقيت: `{current_time_str}`\n🔗 TX: `{tx_hash}`\n■ Status: ✅ Successful"
-                        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": PROOF_CHANNEL_ID, "text": proof_text, "parse_mode": "Markdown"})
-                        
-                        user_success_msg = f"🎉 **تم قبول طلب السحب الخاص بك بنجاح!**\n\n👤 اليوزر: @{username}\n💵 الكمية: `{amount} TON`\n⏰ التوقيت: `{current_time_str}`"
-                        send_telegram_message(u_id, user_success_msg)
-                        
-                        requests.post(f"{TELEGRAM_API_URL}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": f"✅ **تم قبول السحب ونشره في القناة:**\n\n{proof_text}", "parse_mode": "Markdown"})
-                    elif action == "reject":
-                        if u_id not in ADMIN_IDS: 
-                            cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (amount, u_id))
-                            db.commit()
-                        send_telegram_message(u_id, f"❌ **عذراً، تم رفض طلب سحبك (`{amount} TON`) وتم إرجاع الرصيد لحسابك.**")
-                        requests.post(f"{TELEGRAM_API_URL}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": "❌ **تم رفض الطلب واسترجاع الرصيد.**", "parse_mode": "Markdown"})
-                cursor.close()
-                db.close()
-                return "OK", 200
-
+        if chat_id in ADMIN_IDS:
             if data == "start_broadcast":
                 admin_states[chat_id] = "waiting_broadcast"
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "📢 **أرسل الآن الرسالة التي تريد إذاعتها (صورة، فيديو، نص، ملف، أو أزرار وروابط):**"})
+                send_telegram_message(chat_id, "📢 **أرسل الآن الرسالة التي تريد إذاعتها (صورة، فيديو، نص، ملف، أو أزرار وروابط):**")
             elif data == "set_ref_reward": 
                 admin_states[chat_id] = "waiting_ref_reward"
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✍️ أدخل سعر الإحالة الجديد:"})
+                send_telegram_message(chat_id, "✍️ أدخل سعر الإحالة الجديد:")
             elif data == "set_min_withdrawal": 
                 admin_states[chat_id] = "waiting_min_withdrawal"
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✍️️ أدخل الحد الأدنى للسحب الجديد:"})
+                send_telegram_message(chat_id, "✍️ أدخل الحد الأدنى للسحب الجديد:")
             elif data == "add_channel": 
                 admin_states[chat_id] = "waiting_add_channel"
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "📢 أرسل معرف القناة (مثال: `@ChannelUsername`):"})
+                send_telegram_message(chat_id, "📢 أرسل معرف القناة (مثال: `@ChannelUsername`):")
             elif data == "del_channel":
                 if not forced_channels: 
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "⚠ لا توجد قنوات مسجلة."})
+                    send_telegram_message(chat_id, "⚠ لا توجد قنوات مسجلة.")
                 else:
                     buttons = [[{"text": f"🗑️ حذف {ch}", "callback_data": f"remove_ch_{ch}"}] for ch in forced_channels]
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🗑 اختر القناة المراد حذفها:", "reply_markup": {"inline_keyboard": buttons}})
+                    send_telegram_message(chat_id, "🗑 اختر القناة المراد حذفها:", reply_markup={"inline_keyboard": buttons})
             elif data.startswith("remove_ch_"):
                 ch_to_remove = data.replace("remove_ch_", "")
                 if ch_to_remove in forced_channels: 
                     forced_channels.remove(ch_to_remove)
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"✅ تم حذف القناة `{ch_to_remove}`."})
+                send_telegram_message(chat_id, f"✅ تم حذف القناة `{ch_to_remove}`.")
             elif data == "add_bot":
                 admin_states[chat_id] = "waiting_bot_url"
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🤖 أرسل رابط البوت أو رابط الميني أب (Mini App):"})
+                send_telegram_message(chat_id, "🤖 أرسل رابط البوت أو رابط الميني أب (Mini App):")
             elif data == "del_bot":
                 if not forced_bots: 
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "⚠ لا توجد بوتات مسجلة."})
+                    send_telegram_message(chat_id, "⚠ لا توجد بوتات مسجلة.")
                 else:
                     buttons = [[{"text": f"🗑️ حذف {b['name']}", "callback_data": f"remove_bot_{b['name']}"}] for b in forced_bots]
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🗑 اختر البوت المراد حذفه:", "reply_markup": {"inline_keyboard": buttons}})
+                    send_telegram_message(chat_id, "🗑 اختر البوت المراد حذفه:", reply_markup={"inline_keyboard": buttons})
             elif data.startswith("remove_bot_"):
                 b_name_del = data.replace("remove_bot_", "")
                 forced_bots[:] = [b for b in forced_bots if b['name'] != b_name_del]
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"✅ تم حذف البوت بنجاح."})
+                send_telegram_message(chat_id, f"✅ تم حذف البوت بنجاح.")
             elif data == "confirm_broadcast":
                 execute_broadcast(chat_id)
             cursor.close()
             db.close()
             return "OK", 200
 
-        if chat_id not in ADMIN_IDS and chat_id != ADMIN_GROUP_ID and data == "check_next_task":
+        if chat_id not in ADMIN_IDS and data == "check_next_task":
             cursor.close()
             db.close()
             send_next_task_prompt(chat_id)
             return "OK", 200
 
-        if chat_id not in ADMIN_IDS and chat_id != ADMIN_GROUP_ID and data == "click_all_bots":
+        if chat_id not in ADMIN_IDS and data == "click_all_bots":
             progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
             progress["bot_repeat_count"] = progress.get("bot_repeat_count", 0) + 1
             
@@ -537,6 +623,7 @@ def webhook():
         cursor.close()
         db.close()
         return "OK", 200
+
     if "message" in update:
         msg = update["message"]
         chat_id, text = msg["chat"]["id"], msg.get("text", "")
@@ -561,61 +648,39 @@ def webhook():
                 send_main_menu(chat_id, "🔙 تم العودة للقائمة الرئيسية:")
             return "OK", 200
 
-        ADMIN_GROUP_ID = -5481087779
-
-        if chat_id in ADMIN_IDS or chat_id == ADMIN_GROUP_ID:
-            if text.startswith("📦 طلبات السحب المعلقة") or text == "/withdrawals":
-                cursor.execute("SELECT * FROM pending_withdrawals")
-                pend_rows = cursor.fetchall()
-                if not pend_rows:
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✅ لا توجد أي طلبات سحب معلقة حالياً."})
-                else:
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"📦 لديك `{len(pend_rows)}` طلب سحب معلق:"})
-                    for req in pend_rows:
-                        w_id, u_id, amount, wallet, username = req["w_id"], req["user_id"], req["amount"], req["wallet"], req["username"]
-                        kb = {"inline_keyboard": [[{"text": "✅ قبول", "callback_data": f"approve_w_{w_id}"}, {"text": "❌ رفض", "callback_data": f"reject_w_{w_id}"}]]}
-                        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
-                            "chat_id": chat_id, 
-                            "text": f"📌 **طلب معلق:**\n👤 User: @{username}\n🆔 Chat ID: `{u_id}`\n💎 Amount: `{amount} TON`\n💳 Wallet: `{wallet}`", 
-                            "reply_markup": kb, 
-                            "parse_mode": "Markdown"
-                        })
-                cursor.close()
-                db.close()
-                return "OK", 200
-
+        if chat_id in ADMIN_IDS:
             if chat_id in admin_states:
                 state = admin_states[chat_id]
                 if state == "waiting_broadcast":
                     admin_states.pop(chat_id, None)
                     broadcast_data[chat_id] = msg["message_id"]
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "هل تريد تأكيد إرسال هذه الرسالة كإذاعة لجميع المستخدمين؟", "reply_markup": {"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]}})
+                    send_telegram_message(chat_id, "هل تريد تأكيد إرسال هذه الرسالة كإذاعة لجميع المستخدمين؟", reply_markup={"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]})
                 elif state == "waiting_ref_reward":
                     admin_states.pop(chat_id, None)
                     bot_settings["referral_reward"] = float(text.strip())
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✅ تم تحديث سعر الإحالة بنجاح."})
+                    send_telegram_message(chat_id, "✅ تم تحديث سعر الإحالة بنجاح.")
                 elif state == "waiting_min_withdrawal":
                     admin_states.pop(chat_id, None)
                     bot_settings["min_withdrawal"] = float(text.strip())
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✅ تم تحديث الحد الأدنى للسحب بنجاح."})
+                    send_telegram_message(chat_id, "✅ تم تحديث الحد الأدنى للسحب بنجاح.")
                 elif state == "waiting_add_channel":
                     admin_states.pop(chat_id, None)
                     ch = text.strip()
                     if ch not in forced_channels: 
                         forced_channels.append(ch)
                     user_task_progress.clear()
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"✅ تم إضافة القناة `{ch}` بنجاح وتحديث المهام لجميع المستخدمين."})
+                    send_telegram_message(chat_id, f"✅ تم إضافة القناة `{ch}` بنجاح وتحديث المهام لجميع المستخدمين.")
                 elif state == "waiting_bot_url":
                     temp_bot_data[chat_id] = {"url": text.strip()}
                     admin_states[chat_id] = "waiting_bot_name"
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✍️ أرسل الاسم الذي سيظهر للمستخدم كمميز في قائمة البوتات الإجبارية:"})
+                    send_telegram_message(chat_id, "✍️ أرسل الاسم الذي سيظهر للمستخدم كمميز في قائمة البوتات الإجبارية:")
                 elif state == "waiting_bot_name":
                     admin_states.pop(chat_id, None)
                     b_url = temp_bot_data.pop(chat_id, {}).get("url", "")
                     b_name = text.strip()
                     forced_bots.append({"name": b_name, "url": b_url})
                     user_task_progress.clear()
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"✅ تم إضافة البوت `{b_name}` بنجاح ليظهر لجميع المستخدمين."})
+                    send_telegram_message(chat_id, f"✅ تم إضافة البوت `{b_name}` بنجاح ليظهر لجميع المستخدمين.")
                 cursor.close()
                 db.close()
                 return "OK", 200
@@ -678,23 +743,15 @@ def webhook():
                 w_id = hashlib.md5(f"{chat_id}_{time.time()}".encode()).hexdigest()[:10]
                 tx_hash = hashlib.sha256(f"{w_id}_{wallet}_{amount}".encode()).hexdigest()[:24]
 
+                # حفظ طلب السحب في قاعدة البيانات ليظهر فوراً في لوحة تحكم الموقع دون إزعاج بالبوت
                 cursor.execute("INSERT INTO pending_withdrawals (w_id, user_id, amount, wallet, username, tx_hash) VALUES (%s, %s, %s, %s, %s, %s)", 
                                (w_id, chat_id, amount, wallet, username, tx_hash))
                 db.commit()
 
-                # إرسال طلب السحب حصرياً إلى مجموعة المشرفين المحددة
-                kb = {"inline_keyboard": [[{"text": "✅ قبول", "callback_data": f"approve_w_{w_id}"}, {"text": "❌ رفض", "callback_data": f"reject_w_{w_id}"}]]}
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
-                    "chat_id": ADMIN_GROUP_ID,
-                    "text": f"🚨 **طلب سحب جديد معلق:**\n\n👤 المستخدم: @{username}\n🆔 ID: `{chat_id}`\n💎 الكمية: `{amount} TON`\n💳 المحفظة: `{wallet}`",
-                    "reply_markup": kb,
-                    "parse_mode": "Markdown"
-                })
-
                 cursor.close()
                 db.close()
                 user_states.pop(chat_id, None)
-                send_telegram_message(chat_id, f"✅ **تم إرسال طلب السحب بنجاح!**\n\nتم اقتطاع `{amount} TON` من رصيدك وهو قيد المراجعة من قبل الإدارة.")
+                send_telegram_message(chat_id, f"✅ **تم إرسال طلب السحب بنجاح!**\n\nتم اقتطاع `{amount} TON` من رصيدك وهو قيد المراجعة عبر لوحة المشرفين بالموقع.")
                 send_main_menu(chat_id, "القائمة الرئيسية:")
                 return "OK", 200
 
@@ -716,13 +773,8 @@ def webhook():
             is_verified = row["verified"] if row else 0
 
             if chat_id in ADMIN_IDS:
-                cursor.execute("SELECT COUNT(*) as cnt FROM pending_withdrawals")
-                p_row = cursor.fetchone()
-                pend_count = p_row["cnt"] if p_row else 0
-                
                 admin_kb = {
                     "inline_keyboard": [
-                        [{"text": f"📦 طلبات السحب المعلقة ({pend_count})", "callback_data": "check_pending_withdrawals"}],
                         [{"text": "📢 إذاعة جماعية", "callback_data": "start_broadcast"}],
                         [{"text": "💰 تعديل الإحالة", "callback_data": "set_ref_reward"}, {"text": "💸 تعديل السحب", "callback_data": "set_min_withdrawal"}],
                         [{"text": "📢 إضافة قناة", "callback_data": "add_channel"}, {"text": "🗑 حذف قناة", "callback_data": "del_channel"}],
@@ -731,7 +783,7 @@ def webhook():
                 }
                 requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
                     "chat_id": chat_id,
-                    "text": f"👋 أهلاً بك يا مشرف البوت (`{BOT_USERNAME}`).\nلديك صلاحيات كاملة لإدارة البوت والطلبات المعلقة.",
+                    "text": f"👋 أهلاً بك يا مشرف البوت (`{BOT_USERNAME}`).\nطلبـات السحب أصبحت تصل مباشرة إلى لوحة تحكم الموقع دون الحاجة للتفاعل المستمر هنا.",
                     "reply_markup": admin_kb,
                     "parse_mode": "Markdown"
                 })
