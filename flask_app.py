@@ -50,8 +50,7 @@ def init_db():
                         verified INTEGER DEFAULT 0,
                         banned INTEGER DEFAULT 0,
                         invited_by BIGINT,
-                        last_active DOUBLE PRECISION,
-                        tasks_notified INTEGER DEFAULT 0
+                        last_active DOUBLE PRECISION
                     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS fingerprints (
                         fingerprint TEXT PRIMARY KEY,
@@ -223,23 +222,13 @@ def get_next_pending_task(chat_id):
 
     db = get_db()
     cursor = db.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT verified, tasks_notified FROM users WHERE chat_id = %s", (chat_id,))
+    cursor.execute("SELECT verified FROM users WHERE chat_id = %s", (chat_id,))
     row = cursor.fetchone()
     cursor.close()
     db.close()
     
     if not (row and row["verified"]):
         return "webapp", None
-
-    # التحقق من إرسال رسالة النجاح من قبل أم لا
-    if row and row["tasks_notified"] == 0:
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute("UPDATE users SET tasks_notified = 1 WHERE chat_id = %s", (chat_id,))
-        db.commit()
-        cursor.close()
-        db.close()
-        send_telegram_message(chat_id, "✅ **تم اجتياز التحقق بنجاح!**\nإضغط على زر /start لتتمكن من الانتقال لواجهة البوت.")
 
     return "done", None
 
@@ -353,7 +342,7 @@ def verify():
         cursor.close(); db.close()
         return jsonify({'success': False, 'message': '🚫 محظور!'}), 403
 
-    cursor.execute("INSERT INTO users (chat_id, balance, verified, banned, last_active, tasks_notified) VALUES (%s, 0.0, 0, 0, %s, 0) ON CONFLICT (chat_id) DO UPDATE SET last_active = EXCLUDED.last_active", (user_id, time.time()))
+    cursor.execute("INSERT INTO users (chat_id, balance, verified, banned, last_active) VALUES (%s, 0.0, 0, 0, %s) ON CONFLICT (chat_id) DO UPDATE SET last_active = EXCLUDED.last_active", (user_id, time.time()))
     db.commit()
 
     if user_id in ADMIN_IDS:
@@ -451,7 +440,6 @@ def webhook():
                 p = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
                 p["bot_repeat_count"] = p.get("bot_repeat_count", 0) + 1
                 if p["bot_repeat_count"] >= 4: p["bots_done"] = True
-            
             cursor.close(); db.close()
             check_and_prompt_tasks(chat_id)
             return "OK", 200
@@ -466,7 +454,7 @@ def webhook():
 
         db = get_db()
         cursor = db.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("INSERT INTO users (chat_id, username, balance, verified, banned, last_active, tasks_notified) VALUES (%s, %s, 0.0, 0, 0, %s, 0) ON CONFLICT (chat_id) DO UPDATE SET username = EXCLUDED.username, last_active = EXCLUDED.last_active", (chat_id, username, time.time()))
+        cursor.execute("INSERT INTO users (chat_id, username, balance, verified, banned, last_active) VALUES (%s, %s, 0.0, 0, 0, %s) ON CONFLICT (chat_id) DO UPDATE SET username = EXCLUDED.username, last_active = EXCLUDED.last_active", (chat_id, username, time.time()))
         db.commit()
 
         if text.startswith("/start"):
@@ -486,6 +474,7 @@ def webhook():
             send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت NeoEarnbot ⚡")
             return "OK", 200
 
+        # فحص المهام الإجبارية والتوثيق عند الضغط على أي زر داخل البوت
         if not check_and_prompt_tasks(chat_id):
             cursor.close(); db.close()
             return "OK", 200
