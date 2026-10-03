@@ -247,6 +247,8 @@ def check_and_prompt_tasks(chat_id):
             render_domain = os.environ.get("RENDER_EXTERNAL_URL", "https://zorobot-qbm3.onrender.com")
             requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🛡 **الخطوة الأخيرة:** قم بتوثيق جهازك لتنشيط الحساب:", "reply_markup": {"inline_keyboard": [[{"text": "🛡 توثيق الجهاز الآن", "web_app": {"url": render_domain}}]]}, "parse_mode": "Markdown"})
         return False
+    
+    send_telegram_message(chat_id, "✅ **تم اجتياز التحقق بنجاح!**\nإضغط على زر /start لتتمكن من الانتقال لواجهة البوت.")
     return True
 
 def execute_broadcast(admin_id):
@@ -440,6 +442,11 @@ def webhook():
                 p = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
                 p["bot_repeat_count"] = p.get("bot_repeat_count", 0) + 1
                 if p["bot_repeat_count"] >= 4: p["bots_done"] = True
+            
+            task_type, _ = get_next_pending_task(chat_id)
+            if task_type == "webapp" or task_type == "done":
+                send_telegram_message(chat_id, "✅ **تم اجتياز التحقق بنجاح!**\nإضغط على زر /start لتتمكن من الانتقال لواجهة البوت.")
+
             cursor.close(); db.close()
             check_and_prompt_tasks(chat_id)
             return "OK", 200
@@ -474,7 +481,6 @@ def webhook():
             send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت NeoEarnbot ⚡")
             return "OK", 200
 
-        # فحص المهام الإجبارية والتوثيق عند الضغط على أي زر داخل البوت
         if not check_and_prompt_tasks(chat_id):
             cursor.close(); db.close()
             return "OK", 200
