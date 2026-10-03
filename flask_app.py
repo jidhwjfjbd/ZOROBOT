@@ -406,16 +406,8 @@ def webhook():
     if "message" in update:
         chat_type = update["message"]["chat"].get("type", "private")
         if chat_type in ["group", "supergroup"]:
-            return "OK", 200
-
-    if "callback_query" in update:
-        chat_type = update["callback_query"]["message"]["chat"].get("type", "private")
-        if chat_type in ["group", "supergroup"]:
-            try:
-                requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": update["callback_query"]["id"]})
-            except Exception:
-                pass
-            return "OK", 200
+            # السماح بالاستماع للرسائل في مجموعة المشرفين أو التفاعل مع الأزرار
+            pass
 
     if "callback_query" in update:
         cb = update["callback_query"]
@@ -428,14 +420,17 @@ def webhook():
         db = get_db()
         cursor = db.cursor(cursor_factory=RealDictCursor)
 
-        if chat_id in ADMIN_IDS:
+        ADMIN_GROUP_ID = -5481087779
+
+        # التحقق إذا كانت الضغطة صادرة من مجموعة المشرفين أو أحد الأدمنية المعتمدين
+        if chat_id == ADMIN_GROUP_ID or chat_id in ADMIN_IDS:
             if data == "check_pending_withdrawals":
                 cursor.execute("SELECT * FROM pending_withdrawals")
                 pend_rows = cursor.fetchall()
                 if not pend_rows:
-                    send_telegram_message(chat_id, "✅ لا توجد أي طلبات سحب معلقة حالياً.")
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✅ لا توجد أي طلبات سحب معلقة حالياً."})
                 else:
-                    send_telegram_message(chat_id, f"📦 لديك `{len(pend_rows)}` طلب سحب معلق:")
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"📦 لديك `{len(pend_rows)}` طلب سحب معلق:"})
                     for req in pend_rows:
                         w_id, u_id, amount, wallet, username = req["w_id"], req["user_id"], req["amount"], req["wallet"], req["username"]
                         kb = {"inline_keyboard": [[{"text": "✅ قبول", "callback_data": f"approve_w_{w_id}"}, {"text": "❌ رفض", "callback_data": f"reject_w_{w_id}"}]]}
@@ -480,53 +475,53 @@ def webhook():
 
             if data == "start_broadcast":
                 admin_states[chat_id] = "waiting_broadcast"
-                send_telegram_message(chat_id, "📢 **أرسل الآن الرسالة التي تريد إذاعتها (صورة، فيديو، نص، ملف، أو أزرار وروابط):**")
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "📢 **أرسل الآن الرسالة التي تريد إذاعتها (صورة، فيديو، نص، ملف، أو أزرار وروابط):**"})
             elif data == "set_ref_reward": 
                 admin_states[chat_id] = "waiting_ref_reward"
-                send_telegram_message(chat_id, "✍️ أدخل سعر الإحالة الجديد:")
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✍️ أدخل سعر الإحالة الجديد:"})
             elif data == "set_min_withdrawal": 
                 admin_states[chat_id] = "waiting_min_withdrawal"
-                send_telegram_message(chat_id, "✍️ أدخل الحد الأدنى للسحب الجديد:")
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✍️️ أدخل الحد الأدنى للسحب الجديد:"})
             elif data == "add_channel": 
                 admin_states[chat_id] = "waiting_add_channel"
-                send_telegram_message(chat_id, "📢 أرسل معرف القناة (مثال: `@ChannelUsername`):")
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "📢 أرسل معرف القناة (مثال: `@ChannelUsername`):"})
             elif data == "del_channel":
                 if not forced_channels: 
-                    send_telegram_message(chat_id, "⚠ لا توجد قنوات مسجلة.")
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "⚠ لا توجد قنوات مسجلة."})
                 else:
                     buttons = [[{"text": f"🗑️ حذف {ch}", "callback_data": f"remove_ch_{ch}"}] for ch in forced_channels]
-                    send_telegram_message(chat_id, "🗑 اختر القناة المراد حذفها:", reply_markup={"inline_keyboard": buttons})
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🗑 اختر القناة المراد حذفها:", "reply_markup": {"inline_keyboard": buttons}})
             elif data.startswith("remove_ch_"):
                 ch_to_remove = data.replace("remove_ch_", "")
                 if ch_to_remove in forced_channels: 
                     forced_channels.remove(ch_to_remove)
-                send_telegram_message(chat_id, f"✅ تم حذف القناة `{ch_to_remove}`.")
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"✅ تم حذف القناة `{ch_to_remove}`."})
             elif data == "add_bot":
                 admin_states[chat_id] = "waiting_bot_url"
-                send_telegram_message(chat_id, "🤖 أرسل رابط البوت أو رابط الميني أب (Mini App):")
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🤖 أرسل رابط البوت أو رابط الميني أب (Mini App):"})
             elif data == "del_bot":
                 if not forced_bots: 
-                    send_telegram_message(chat_id, "⚠ لا توجد بوتات مسجلة.")
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "⚠ لا توجد بوتات مسجلة."})
                 else:
                     buttons = [[{"text": f"🗑️ حذف {b['name']}", "callback_data": f"remove_bot_{b['name']}"}] for b in forced_bots]
-                    send_telegram_message(chat_id, "🗑 اختر البوت المراد حذفه:", reply_markup={"inline_keyboard": buttons})
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🗑 اختر البوت المراد حذفه:", "reply_markup": {"inline_keyboard": buttons}})
             elif data.startswith("remove_bot_"):
                 b_name_del = data.replace("remove_bot_", "")
                 forced_bots[:] = [b for b in forced_bots if b['name'] != b_name_del]
-                send_telegram_message(chat_id, f"✅ تم حذف البوت بنجاح.")
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"✅ تم حذف البوت بنجاح."})
             elif data == "confirm_broadcast":
                 execute_broadcast(chat_id)
             cursor.close()
             db.close()
             return "OK", 200
 
-        if chat_id not in ADMIN_IDS and data == "check_next_task":
+        if chat_id not in ADMIN_IDS and chat_id != ADMIN_GROUP_ID and data == "check_next_task":
             cursor.close()
             db.close()
             send_next_task_prompt(chat_id)
             return "OK", 200
 
-        if chat_id not in ADMIN_IDS and data == "click_all_bots":
+        if chat_id not in ADMIN_IDS and chat_id != ADMIN_GROUP_ID and data == "click_all_bots":
             progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
             progress["bot_repeat_count"] = progress.get("bot_repeat_count", 0) + 1
             
@@ -566,14 +561,16 @@ def webhook():
                 send_main_menu(chat_id, "🔙 تم العودة للقائمة الرئيسية:")
             return "OK", 200
 
-        if chat_id in ADMIN_IDS:
-            if text.startswith("📦 طلبات السحب المعلقة"):
+        ADMIN_GROUP_ID = -5481087779
+
+        if chat_id in ADMIN_IDS or chat_id == ADMIN_GROUP_ID:
+            if text.startswith("📦 طلبات السحب المعلقة") or text == "/withdrawals":
                 cursor.execute("SELECT * FROM pending_withdrawals")
                 pend_rows = cursor.fetchall()
                 if not pend_rows:
-                    send_telegram_message(chat_id, "✅ لا توجد أي طلبات سحب معلقة حالياً.")
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✅ لا توجد أي طلبات سحب معلقة حالياً."})
                 else:
-                    send_telegram_message(chat_id, f"📦 لديك `{len(pend_rows)}` طلب سحب معلق:")
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"📦 لديك `{len(pend_rows)}` طلب سحب معلق:"})
                     for req in pend_rows:
                         w_id, u_id, amount, wallet, username = req["w_id"], req["user_id"], req["amount"], req["wallet"], req["username"]
                         kb = {"inline_keyboard": [[{"text": "✅ قبول", "callback_data": f"approve_w_{w_id}"}, {"text": "❌ رفض", "callback_data": f"reject_w_{w_id}"}]]}
@@ -592,33 +589,33 @@ def webhook():
                 if state == "waiting_broadcast":
                     admin_states.pop(chat_id, None)
                     broadcast_data[chat_id] = msg["message_id"]
-                    send_telegram_message(chat_id, "هل تريد تأكيد إرسال هذه الرسالة كإذاعة لجميع المستخدمين؟", reply_markup={"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]})
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "هل تريد تأكيد إرسال هذه الرسالة كإذاعة لجميع المستخدمين؟", "reply_markup": {"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]}})
                 elif state == "waiting_ref_reward":
                     admin_states.pop(chat_id, None)
                     bot_settings["referral_reward"] = float(text.strip())
-                    send_telegram_message(chat_id, "✅ تم تحديث سعر الإحالة بنجاح.")
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✅ تم تحديث سعر الإحالة بنجاح."})
                 elif state == "waiting_min_withdrawal":
                     admin_states.pop(chat_id, None)
                     bot_settings["min_withdrawal"] = float(text.strip())
-                    send_telegram_message(chat_id, "✅ تم تحديث الحد الأدنى للسحب بنجاح.")
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✅ تم تحديث الحد الأدنى للسحب بنجاح."})
                 elif state == "waiting_add_channel":
                     admin_states.pop(chat_id, None)
                     ch = text.strip()
                     if ch not in forced_channels: 
                         forced_channels.append(ch)
                     user_task_progress.clear()
-                    send_telegram_message(chat_id, f"✅ تم إضافة القناة `{ch}` بنجاح وتحديث المهام لجميع المستخدمين.")
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"✅ تم إضافة القناة `{ch}` بنجاح وتحديث المهام لجميع المستخدمين."})
                 elif state == "waiting_bot_url":
                     temp_bot_data[chat_id] = {"url": text.strip()}
                     admin_states[chat_id] = "waiting_bot_name"
-                    send_telegram_message(chat_id, "✍️ أرسل الاسم الذي سيظهر للمستخدم كمميز في قائمة البوتات الإجبارية:")
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "✍️ أرسل الاسم الذي سيظهر للمستخدم كمميز في قائمة البوتات الإجبارية:"})
                 elif state == "waiting_bot_name":
                     admin_states.pop(chat_id, None)
                     b_url = temp_bot_data.pop(chat_id, {}).get("url", "")
                     b_name = text.strip()
                     forced_bots.append({"name": b_name, "url": b_url})
                     user_task_progress.clear()
-                    send_telegram_message(chat_id, f"✅ تم إضافة البوت `{b_name}` بنجاح ليظهر لجميع المستخدمين.")
+                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": f"✅ تم إضافة البوت `{b_name}` بنجاح ليظهر لجميع المستخدمين."})
                 cursor.close()
                 db.close()
                 return "OK", 200
@@ -685,14 +682,14 @@ def webhook():
                                (w_id, chat_id, amount, wallet, username, tx_hash))
                 db.commit()
 
-                for admin_id in ADMIN_IDS:
-                    kb = {"inline_keyboard": [[{"text": "✅ قبول", "callback_data": f"approve_w_{w_id}"}, {"text": "❌ رفض", "callback_data": f"reject_w_{w_id}"}]]}
-                    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
-                        "chat_id": admin_id,
-                        "text": f"🚨 **طلب سحب جديد معلق:**\n\n👤 المستخدم: @{username}\n🆔 ID: `{chat_id}`\n💎 الكمية: `{amount} TON`\n💳 المحفظة: `{wallet}`",
-                        "reply_markup": kb,
-                        "parse_mode": "Markdown"
-                    })
+                # إرسال طلب السحب حصرياً إلى مجموعة المشرفين المحددة
+                kb = {"inline_keyboard": [[{"text": "✅ قبول", "callback_data": f"approve_w_{w_id}"}, {"text": "❌ رفض", "callback_data": f"reject_w_{w_id}"}]]}
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
+                    "chat_id": ADMIN_GROUP_ID,
+                    "text": f"🚨 **طلب سحب جديد معلق:**\n\n👤 المستخدم: @{username}\n🆔 ID: `{chat_id}`\n💎 الكمية: `{amount} TON`\n💳 المحفظة: `{wallet}`",
+                    "reply_markup": kb,
+                    "parse_mode": "Markdown"
+                })
 
                 cursor.close()
                 db.close()
