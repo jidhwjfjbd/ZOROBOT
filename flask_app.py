@@ -232,45 +232,22 @@ def get_next_pending_task(chat_id):
 
     return "done", None
 
-def send_next_task_prompt(chat_id):
+def check_and_prompt_tasks(chat_id):
     task_type, data = get_next_pending_task(chat_id)
-
-    if task_type == "channel":
-        buttons = [[{"text": f"📢 انضمام إلى {ch}", "url": f"https://t.me/{ch.replace('@', '')}"}] for ch in data]
-        buttons.append([{"text": "✅ تحقق من الاشتراك", "callback_data": "check_next_task"}])
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "⚠️ **يجب الانضمام للقنوات الإجبارية أولاً للاستمرار:**", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
-
-    elif task_type == "bots_all":
-        buttons = [[{"text": f"🤖 تسجيل في بوت: {b['name']}", "url": b['url'] if b['url'].startswith('http') else f"https://t.me/{b['url'].replace('@', '')}"}] for b in data]
-        buttons.append([{"text": "✅ تحقق من التسجيل", "callback_data": "click_all_bots"}])
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🤖 **مهام البوتات الإجبارية:**\nسجل في البوتات ثم اضغط التحقق.", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
-
-    elif task_type == "webapp":
-        render_domain = os.environ.get("RENDER_EXTERNAL_URL", "https://zorobot-qbm3.onrender.com")
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🛡 **الخطوة الأخيرة:** قم بتوثيق جهازك لتنشيط الحساب:", "reply_markup": {"inline_keyboard": [[{"text": "🛡 توثيق الجهاز الآن", "web_app": {"url": render_domain}}]]}, "parse_mode": "Markdown"})
-
-    elif task_type == "done":
-        db = get_db()
-        cursor = db.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT verified FROM users WHERE chat_id = %s", (chat_id,))
-        row = cursor.fetchone()
-        if row and not row["verified"] and chat_id not in ADMIN_IDS:
-            cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = %s", (chat_id,))
-            cursor.execute("SELECT invited_by FROM users WHERE chat_id = %s", (chat_id,))
-            u_row = cursor.fetchone()
-            db.commit()
-            if u_row and u_row["invited_by"] and u_row["invited_by"] != chat_id:
-                ref_id = u_row["invited_by"]
-                cursor.execute("SELECT 1 FROM referrals WHERE referrer_id = %s AND referred_id = %s", (ref_id, chat_id))
-                if not cursor.fetchone():
-                    reward = bot_settings["referral_reward"]
-                    cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (reward, ref_id))
-                    cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (ref_id, chat_id))
-                    db.commit()
-                    send_telegram_message(ref_id, f"🎉 مستخدم جديد انضم عبر رابطك وأتم التحقق! حصلت على `{reward} TON`.")
-        cursor.close()
-        db.close()
-        send_main_menu(chat_id, "✨ تم التحقق بنجاح وأصبح حسابك مفعلاً!")
+    if task_type != "done":
+        if task_type == "channel":
+            buttons = [[{"text": f"📢 انضمام إلى {ch}", "url": f"https://t.me/{ch.replace('@', '')}"}] for ch in data]
+            buttons.append([{"text": "✅ تحقق من الاشتراك", "callback_data": "check_next_task"}])
+            requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "⚠️ **يجب الانضمام للقنوات الإجبارية أولاً للاستمرار:**", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
+        elif task_type == "bots_all":
+            buttons = [[{"text": f"🤖 تسجيل في بوت: {b['name']}", "url": b['url'] if b['url'].startswith('http') else f"https://t.me/{b['url'].replace('@', '')}"}] for b in data]
+            buttons.append([{"text": "✅ تحقق من التسجيل", "callback_data": "click_all_bots"}])
+            requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🤖 **مهام البوتات الإجبارية:**\nسجل في البوتات ثم اضغط التحقق.", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
+        elif task_type == "webapp":
+            render_domain = os.environ.get("RENDER_EXTERNAL_URL", "https://zorobot-qbm3.onrender.com")
+            requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🛡 **الخطوة الأخيرة:** قم بتوثيق جهازك لتنشيط الحساب:", "reply_markup": {"inline_keyboard": [[{"text": "🛡 توثيق الجهاز الآن", "web_app": {"url": render_domain}}]]}, "parse_mode": "Markdown"})
+        return False
+    return True
 
 def execute_broadcast(admin_id):
     b_msg = broadcast_data.get(admin_id)
@@ -378,13 +355,26 @@ def verify():
     if f_row and f_row["chat_id"] != user_id:
         cursor.execute("UPDATE users SET banned = 1 WHERE chat_id = %s", (user_id,))
         db.commit(); cursor.close(); db.close()
-        return jsonify({'success': False, 'message': '🚫 حظر لمخالفة سياسة الحساب الواحد!'}), 403
+        return jsonify({'success': False, 'message': '🚫 حظر لمخالفة سياسة الحساب الواحد! لم تُمنح أي مكافأة للمحيل.'}), 403
 
     cursor.execute("INSERT INTO fingerprints (fingerprint, chat_id) VALUES (%s, %s) ON CONFLICT (fingerprint) DO UPDATE SET chat_id = EXCLUDED.chat_id", (fingerprint, user_id))
     db.commit()
 
     cursor.execute("UPDATE users SET verified = 1 WHERE chat_id = %s", (user_id,))
+    cursor.execute("SELECT invited_by FROM users WHERE chat_id = %s", (user_id,))
+    u_row = cursor.fetchone()
     db.commit()
+
+    if u_row and u_row["invited_by"] and u_row["invited_by"] != user_id:
+        ref_id = u_row["invited_by"]
+        cursor.execute("SELECT 1 FROM referrals WHERE referrer_id = %s AND referred_id = %s", (ref_id, user_id))
+        if not cursor.fetchone():
+            reward = bot_settings["referral_reward"]
+            cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (reward, ref_id))
+            cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (ref_id, user_id))
+            db.commit()
+            send_telegram_message(ref_id, f"🎉 مستخدم جديد انضم عبر رابطك وأتم التحقق! حصلت على `{reward} TON`.")
+
     cursor.close(); db.close()
     return jsonify({'success': True})
 @app.route('/webhook', methods=['POST'])
@@ -451,7 +441,7 @@ def webhook():
                 p["bot_repeat_count"] = p.get("bot_repeat_count", 0) + 1
                 if p["bot_repeat_count"] >= 4: p["bots_done"] = True
             cursor.close(); db.close()
-            send_next_task_prompt(chat_id)
+            check_and_prompt_tasks(chat_id)
             return "OK", 200
 
         cursor.close(); db.close()
@@ -466,6 +456,28 @@ def webhook():
         cursor = db.cursor(cursor_factory=RealDictCursor)
         cursor.execute("INSERT INTO users (chat_id, username, balance, verified, banned, last_active) VALUES (%s, %s, 0.0, 0, 0, %s) ON CONFLICT (chat_id) DO UPDATE SET username = EXCLUDED.username, last_active = EXCLUDED.last_active", (chat_id, username, time.time()))
         db.commit()
+
+        if text.startswith("/start"):
+            parts = text.split(" ")
+            if len(parts) > 1 and parts[1].isdigit():
+                ref_id = int(parts[1])
+                if ref_id != chat_id and chat_id not in ADMIN_IDS:
+                    cursor.execute("SELECT invited_by, verified FROM users WHERE chat_id = %s", (chat_id,))
+                    r_chk = cursor.fetchone()
+                    if r_chk and not r_chk["invited_by"] and not r_chk["verified"]:
+                        cursor.execute("UPDATE users SET invited_by = %s WHERE chat_id = %s", (ref_id, chat_id))
+                        db.commit()
+
+            cursor.close(); db.close()
+            if not check_and_prompt_tasks(chat_id):
+                return "OK", 200
+            send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت NeoEarnbot ⚡")
+            return "OK", 200
+
+        # فحص المهام الإجبارية والتوثيق عند الضغط على أي زر داخل البوت
+        if not check_and_prompt_tasks(chat_id):
+            cursor.close(); db.close()
+            return "OK", 200
 
         if text == "🔙 العودة للقائمة الرئيسية":
             user_states.pop(chat_id, None); admin_states.pop(chat_id, None)
@@ -539,24 +551,7 @@ def webhook():
                 send_main_menu(chat_id, "القائمة الرئيسية:")
                 return "OK", 200
 
-        if text.startswith("/start"):
-            parts = text.split(" ")
-            if len(parts) > 1 and parts[1].isdigit():
-                ref_id = int(parts[1])
-                if ref_id != chat_id and chat_id not in ADMIN_IDS:
-                    cursor.execute("SELECT invited_by FROM users WHERE chat_id = %s", (chat_id,))
-                    r_chk = cursor.fetchone()
-                    if r_chk and not r_chk["invited_by"]:
-                        cursor.execute("UPDATE users SET invited_by = %s WHERE chat_id = %s", (ref_id, chat_id))
-                        db.commit()
-
-            cursor.close(); db.close()
-            t_type, _ = get_next_pending_task(chat_id)
-            if t_type != "done": send_next_task_prompt(chat_id)
-            else: send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت NeoEarnbot ⚡")
-            return "OK", 200
-
-        elif text == "🎁 رابط الإحالة":
+        if text == "🎁 رابط الإحالة":
             ref_link = f"https://t.me/{BOT_USERNAME}?start={chat_id}"
             cursor.execute("SELECT COUNT(*) as count FROM referrals WHERE referrer_id = %s", (chat_id,))
             cnt = cursor.fetchone()["count"]
