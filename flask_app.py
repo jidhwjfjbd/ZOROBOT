@@ -11,7 +11,7 @@ BOT_TOKEN = "8785452517:AAGy-93isP7k1qQxO_LIDb7yZMjieDhJFiw"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 ADMIN_IDS = [8667934765, 8557464787]
-PRIMARY_ADMIN_USERNAME = "@sig2siel"
+PRIMARY_ADMIN_USERNAME = "@m9aws"
 PROOF_CHANNEL_ID = "@Proofsofbotwithdrawal"
 
 # المفتاح السري المخصص لوحة تحكم الويب الخاصة بطلبات السحب
@@ -25,7 +25,7 @@ bot_settings = {
 
 app = Flask(__name__)
 
-BOT_USERNAME = "ZoroBot"
+BOT_USERNAME = "NeoEarnbot"
 try:
     bot_info = requests.get(f"{TELEGRAM_API_URL}/getMe").json()
     if bot_info.get("ok"):
@@ -87,7 +87,8 @@ def get_next_pending_task(chat_id):
 
     progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
 
-    if forced_channels and not progress["channels_done"]:
+    # دائمًا نقوم بإعادة التحقق من القنوات حتى لو تم إنجازها سابقاً للتأكد من عدم مغادرة المستخدم
+    if forced_channels:
         missing_channels = []
         for ch in forced_channels:
             clean_ch = ch.strip()
@@ -98,10 +99,11 @@ def get_next_pending_task(chat_id):
             except Exception:
                 missing_channels.append(clean_ch)
         
-        if not missing_channels:
-            progress["channels_done"] = True
-        else:
+        if missing_channels:
+            progress["channels_done"] = False
             return "channel", missing_channels
+        else:
+            progress["channels_done"] = True
     else:
         progress["channels_done"] = True
 
@@ -135,7 +137,7 @@ def send_next_task_prompt(chat_id):
             ch_name = ch.replace('@', '')
             buttons.append([{"text": f"📢 انضمام إلى {ch}", "url": f"https://t.me/{ch_name}"}])
         buttons.append([{"text": "✅ تحقق من الاشتراك", "callback_data": "check_next_task"}])
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "⚠️ **الخطوة الأولى:** يجب عليك الانضمام إلى القنوات التالية أولاً للاستمرار:", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "⚠️ **عذراً، يجب عليك الانضمام إلى القنوات الإجبارية التالية أولاً للاستمرار وتجنب توقف الحساب:**", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
 
     elif task_type == "bots_all":
         buttons = []
@@ -149,7 +151,7 @@ def send_next_task_prompt(chat_id):
 
     elif task_type == "webapp":
         render_domain = os.environ.get("RENDER_EXTERNAL_URL", "https://zorobot-qbm3.onrender.com")
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🛡 **الخطوة الأخيرة:** قم بتوثيق جهازك عبر زر الأمان أدناه لتنشيط الحساب:", "reply_markup": {"inline_keyboard": [[{"text": "🛡 توثيق الجهاز الآن (ZORO)", "web_app": {"url": render_domain}}]]}, "parse_mode": "Markdown"})
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🛡 **الخطوة الأخيرة:** قم بتوثيق جهازك عبر زر الأمان أدناه لتنشيط الحساب:", "reply_markup": {"inline_keyboard": [[{"text": "🛡 توثيق الجهاز الآن", "web_app": {"url": render_domain}}]]}, "parse_mode": "Markdown"})
 
     elif task_type == "done":
         db = get_db()
@@ -244,7 +246,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ZORO Security - نظام التحقق</title>
+    <title>NeoEarnbot - نظام التحقق</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fingerprintjs2/2.1.4/fingerprint2.min.js"></script>
     <style>
@@ -257,7 +259,7 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="card">
-        <h2>نظام حماية ZORO</h2>
+        <h2>حماية NeoEarnbot</h2>
         <p style="color: #94a3b8; font-size: 14px; margin-bottom: 20px;">قم بتأكيد بصمة جهازك لتنشيط الحساب نهائياً.</p>
         <button id="verifyBtn" class="btn" onclick="processVerification()">تأكيد الهوية والجهاز ✨</button>
         <div id="channels-warning" class="warning-box">⚠️ يجب إكمال القنوات والبوتات أولاً!</div>
@@ -328,7 +330,7 @@ ADMIN_DASHBOARD_HTML = """
 </head>
 <body>
     <div class="container">
-        <h2>📦 لوحة إدارة طلبات السحب (ZoroBot)</h2>
+        <h2>📦 لوحة إدارة طلبات السحب (NeoEarnbot)</h2>
         <table>
             <thead>
                 <tr>
@@ -555,6 +557,13 @@ def webhook():
         except Exception: 
             pass
 
+        # التحقق من أن المستخدم لم يغادر إحدى القنوات قبل تنفيذ أي زر أونلاين
+        if chat_id not in ADMIN_IDS:
+            t_type, _ = get_next_pending_task(chat_id)
+            if t_type in ["channel", "bots_all"]:
+                send_next_task_prompt(chat_id)
+                return "OK", 200
+
         db = get_db()
         cursor = db.cursor(cursor_factory=RealDictCursor)
 
@@ -589,7 +598,7 @@ def webhook():
                 if not forced_bots: 
                     send_telegram_message(chat_id, "⚠ لا توجد بوتات مسجلة.")
                 else:
-                    buttons = [[{"text": f"🗑️ حذف {b['name']}", "callback_data": f"remove_bot_{b['name']}"}] for b in forced_bots]
+                    buttons = [[{"text": f"🗑️️ حذف {b['name']}", "callback_data": f"remove_bot_{b['name']}"}] for b in forced_bots]
                     send_telegram_message(chat_id, "🗑 اختر البوت المراد حذفه:", reply_markup={"inline_keyboard": buttons})
             elif data.startswith("remove_bot_"):
                 b_name_del = data.replace("remove_bot_", "")
@@ -635,6 +644,15 @@ def webhook():
         db.commit()
 
         user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})["username"] = username
+
+        # التحقق الفوري من القنوات في حال كتب أي نص أو حاول استخدام أزرار لوحة المفاتيح
+        if chat_id not in ADMIN_IDS and text != "🔙 العودة للقائمة الرئيسية":
+            t_type, _ = get_next_pending_task(chat_id)
+            if t_type in ["channel", "bots_all"]:
+                cursor.close()
+                db.close()
+                send_next_task_prompt(chat_id)
+                return "OK", 200
 
         if text == "🔙 العودة للقائمة الرئيسية":
             user_states.pop(chat_id, None)
@@ -743,7 +761,6 @@ def webhook():
                 w_id = hashlib.md5(f"{chat_id}_{time.time()}".encode()).hexdigest()[:10]
                 tx_hash = hashlib.sha256(f"{w_id}_{wallet}_{amount}".encode()).hexdigest()[:24]
 
-                # حفظ طلب السحب في قاعدة البيانات ليظهر فوراً في لوحة تحكم الموقع دون إزعاج بالبوت
                 cursor.execute("INSERT INTO pending_withdrawals (w_id, user_id, amount, wallet, username, tx_hash) VALUES (%s, %s, %s, %s, %s, %s)", 
                                (w_id, chat_id, amount, wallet, username, tx_hash))
                 db.commit()
@@ -798,7 +815,7 @@ def webhook():
             if task_type != "done":
                 send_next_task_prompt(chat_id)
             else:
-                send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت ZORO!")
+                send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت NeoEarnbot ⚡")
             return "OK", 200
 
         elif text == "🎁 رابط الإحالة":
@@ -821,12 +838,22 @@ def webhook():
                 send_telegram_message(chat_id, "⚠️ يجب عليك ربط محفظتك أولاً عبر زر '💳 ربط المحفظة' قبل طلب السحب.")
                 return "OK", 200
             
-            if urow["balance"] < bot_settings["min_withdrawal"]:
-                send_telegram_message(chat_id, f"❌ عذراً، رصيدك الحالي (`{urow['balance']} TON`) أقل من الحد الأدنى للسحب (`{bot_settings['min_withdrawal']} TON`).")
+            # حل مشكلة التداخل في الأرقام والنصوص بتنظيمها في أسطر مستقلة وواضحة مع رموز واضحة
+            balance_val = urow['balance']
+            min_w_val = bot_settings['min_withdrawal']
+            msg_balance = (
+                "💎 **معلومات رصيدك والسحب:**\n\n"
+                f"• رصيدك الحالي: `{balance_val}` TON\n"
+                f"• الحد الأدنى للسحب: `{min_w_val}` TON\n\n"
+                "اختر الإجراء المناسب أو أرسل كمية السحب."
+            )
+            
+            if balance_val < min_w_val:
+                send_telegram_message(chat_id, f"❌ عذراً، رصيدك الحالي (`{balance_val} TON`) أقل من الحد الأدنى للسحب (`{min_w_val} TON`).")
                 return "OK", 200
 
             user_states[chat_id] = "waiting_withdraw_amount"
-            send_telegram_message(chat_id, f"💸 **طلب سحب الأرباح:**\n\nرصيدك المتاح: `{urow['balance']} TON`\nالحد الأدنى: `{bot_settings['min_withdrawal']} TON`\n\n✍️ أرسل الآن الكمية التي تريد سحبها:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
+            send_telegram_message(chat_id, f"💸 **طلب سحب الأرباح:**\n\nرصيدك المتاح: `{balance_val} TON`\nالحد الأدنى: `{min_w_val} TON`\n\n✍️ أرسل الآن الكمية التي تريد سحبها:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
             return "OK", 200
 
         elif text == "💳 ربط المحفظة":
@@ -854,29 +881,6 @@ def webhook():
 
         cursor.close()
         db.close()
-
-    if "callback_query" in update:
-        cb = update["callback_query"]
-        cb_id, chat_id, data = cb["id"], cb["message"]["chat"]["id"], cb.get("data", "")
-        if data == "request_withdrawal":
-            db = get_db()
-            cursor = db.cursor(cursor_factory=RealDictCursor)
-            cursor.execute("SELECT balance, wallet FROM users WHERE chat_id = %s", (chat_id,))
-            urow = cursor.fetchone()
-            cursor.close()
-            db.close()
-            
-            if not urow or not urow["wallet"]:
-                send_telegram_message(chat_id, "⚠️ يجب عليك ربط محفظتك أولاً عبر زر '💳 ربط المحفظة' قبل طلب السحب.")
-                return "OK", 200
-            
-            if urow["balance"] < bot_settings["min_withdrawal"]:
-                send_telegram_message(chat_id, f"❌ عذراً، رصيدك الحالي (`{urow['balance']} TON`) أقل من الحد الأدنى للسحب (`{bot_settings['min_withdrawal']} TON`).")
-                return "OK", 200
-
-            user_states[chat_id] = "waiting_withdraw_amount"
-            send_telegram_message(chat_id, f"💸 **طلب سحب الأرباح:**\n\nرصيدك المتاح: `{urow['balance']} TON`\nالحد الأدنى: `{bot_settings['min_withdrawal']} TON`\n\n✍ أرسل الآن الكمية التي تريد سحبها:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
-            return "OK", 200
 
     return "OK", 200
 
