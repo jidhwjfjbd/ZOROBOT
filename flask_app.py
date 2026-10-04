@@ -30,8 +30,6 @@ except Exception:
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-forced_channels = []
-forced_bots = []      
 user_task_progress = {} 
 admin_states = {}
 user_states = {}      
@@ -70,6 +68,15 @@ def init_db():
                             wallet TEXT,
                             username TEXT,
                             tx_hash TEXT
+                        )''')
+        # جدول قنوات الاشتراك الإجباري الدائم
+        cursor.execute('''CREATE TABLE IF NOT EXISTS forced_channels (
+                            channel_username TEXT PRIMARY KEY
+                        )''')
+        # جدول بوتات الاشتراك الإجباري الدائم
+        cursor.execute('''CREATE TABLE IF NOT EXISTS forced_bots (
+                            bot_name TEXT PRIMARY KEY,
+                            bot_url TEXT
                         )''')
         conn.commit()
         cursor.close()
@@ -141,12 +148,26 @@ def get_next_pending_task(chat_id):
         
     progress = user_task_progress.setdefault(chat_id, {"bots_done": False, "bot_clicks": 0})
     
-    # 1. فحص البوتات الإجبارية (يجب الضغط مرتين وتأكيدها)
+    db = get_db()
+    cursor = db.cursor(cursor_factory=RealDictCursor)
+    
+    # جلب البوتات الإجبارية من قاعدة البيانات
+    cursor.execute("SELECT * FROM forced_bots")
+    forced_bots = cursor.fetchall()
+
+    # 1. فحص البوتات الإجبارية
     if forced_bots and not progress["bots_done"]:
         if progress["bot_clicks"] < 2:
+            cursor.close(); db.close()
             return "bots_all", forced_bots
         else:
             progress["bots_done"] = True
+
+    # جلب القنوات الإجبارية من قاعدة البيانات
+    cursor.execute("SELECT channel_username FROM forced_channels")
+    forced_channels = [row["channel_username"] for row in cursor.fetchall()]
+    cursor.close()
+    db.close()
 
     # 2. فحص القنوات الإجبارية
     for ch in forced_channels:
@@ -174,7 +195,7 @@ def check_and_prompt_tasks(chat_id):
     task_type, data = get_next_pending_task(chat_id)
     if task_type != "done":
         if task_type == "bots_all":
-            buttons = [[{"text": f"🤖 تسجيل في بوت: {b['name']}", "url": b['url'] if b['url'].startswith('http') else f"https://t.me/{b['url'].replace('@', '')}"}] for b in data]
+            buttons = [[{"text": f"🤖 تسجيل في بوت: {b['bot_name']}", "url": b['bot_url'] if b['bot_url'].startswith('http') else f"https://t.me/{b['bot_url'].replace('@', '')}"}] for b in data]
             buttons.append([{"text": "✅ تحقق من التسجيل", "callback_data": "check_bots_step"}])
             requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
                 "chat_id": chat_id, 
@@ -285,7 +306,6 @@ def verify():
     return jsonify({'success': True})
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    global forced_bots, forced_channels
     update = request.get_json()
     if not update: return "OK", 200
 
@@ -300,7 +320,6 @@ def webhook():
         db = get_db()
         cursor = db.cursor(cursor_factory=RealDictCursor)
 
-        # التعامل مع أزرار التحقق من مهام البوتات أو القنوات
         if data == "check_bots_step":
             prog = user_task_progress.setdefault(user_who_clicked, {"bots_done": False, "bot_clicks": 0})
             prog["bot_clicks"] += 1
@@ -310,7 +329,6 @@ def webhook():
                 prog["bots_done"] = True
                 requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "✅ تم التحقق بنجاح!"})
             
-            # حذف رسالة الأزرار القديمة وإعادة فحص المهام التالية
             try:
                 requests.post(f"{TELEGRAM_API_URL}/deleteMessage", json={"chat_id": user_who_clicked, "message_id": cb["message"]["message_id"]})
             except Exception:
@@ -386,22 +404,34 @@ def webhook():
             elif data == "add_channel":
                 admin_states[user_who_clicked] = "waiting_add_channel"
                 send_telegram_message(user_who_clicked, "📢 أرسل معرف القناة (مثال: `@Channel`):")
-            elif data == "del_channel" and forced_channels:
-                buttons = [[{"text": f"🗑 {ch}", "callback_data": f"remove_ch_{ch}"}] for ch in forced_channels]
-                send_telegram_message(user_who_clicked, "اختر القناة للحذف:", reply_markup={"inline_keyboard": buttons})
+            elif data == "del_channel":
+                cursor.execute("SELECT channel_username FROM forced_channels")
+                ch_rows = cursor.fetchall()
+                if ch_rows:
+                    buttons = [[{"text": f"🗑 {r['channel_username']}", "callback_data": f"remove_ch_{r['channel_username']}"}] for r in ch_rows]
+                    send_telegram_message(user_who_clicked, "اختر القناة للحذف:", reply_markup={"inline_keyboard": buttons})
+                else:
+                    send_telegram_message(user_who_clicked, "⚠️️ لا توجد قنوات مسجلة حالياً.")
             elif data.startswith("remove_ch_"):
                 ch = data.replace("remove_ch_", "")
-                if ch in forced_channels: forced_channels.remove(ch)
+                cursor.execute("DELETE FROM forced_channels WHERE channel_username = %s", (ch,))
+                db.commit()
                 send_telegram_message(user_who_clicked, f"✅ تم حذف القناة `{ch}`.")
             elif data == "add_bot":
                 admin_states[user_who_clicked] = "waiting_bot_url"
                 send_telegram_message(user_who_clicked, "🤖 أرسل رابط البوت الإجباري:")
-            elif data == "del_bot" and forced_bots:
-                buttons = [[{"text": f"🗑 {b['name']}", "callback_data": f"remove_bot_{b['name']}"}] for b in forced_bots]
-                send_telegram_message(user_who_clicked, "اختر البوت للحذف:", reply_markup={"inline_keyboard": buttons})
+            elif data == "del_bot":
+                cursor.execute("SELECT bot_name FROM forced_bots")
+                b_rows = cursor.fetchall()
+                if b_rows:
+                    buttons = [[{"text": f"🗑 {r['bot_name']}", "callback_data": f"remove_bot_{r['bot_name']}"}] for r in b_rows]
+                    send_telegram_message(user_who_clicked, "اختر البوت للحذف:", reply_markup={"inline_keyboard": buttons})
+                else:
+                    send_telegram_message(user_who_clicked, "⚠️ لا توجد بوتات مسجلة حالياً.")
             elif data.startswith("remove_bot_"):
                 b_name = data.replace("remove_bot_", "")
-                forced_bots[:] = [b for b in forced_bots if b['name'] != b_name]
+                cursor.execute("DELETE FROM forced_bots WHERE bot_name = %s", (b_name,))
+                db.commit()
                 send_telegram_message(user_who_clicked, "✅ تم حذف البوت.")
             elif data == "confirm_broadcast":
                 execute_broadcast(user_who_clicked)
@@ -438,7 +468,6 @@ def webhook():
             send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت NeoEarnbot ⚡")
             return "OK", 200
 
-        # فحص إلزامي للمهام قبل تنفيذ أي أمر أو زر عادي
         if not check_and_prompt_tasks(chat_id):
             cursor.close(); db.close()
             return "OK", 200
@@ -461,18 +490,21 @@ def webhook():
                 bot_settings["min_withdrawal"] = float(text.strip())
                 send_telegram_message(chat_id, "✅ تم تحديث الحد الأدنى للسحب.")
             elif st == "waiting_add_channel":
-                forced_channels.append(text.strip())
+                cursor.execute("INSERT INTO forced_channels (channel_username) VALUES (%s) ON CONFLICT DO NOTHING", (text.strip(),))
+                db.commit()
                 user_task_progress.clear()
-                send_telegram_message(chat_id, "✅ تمت إضافة القناة بنجاح.")
+                send_telegram_message(chat_id, "✅ تمت إضافة القناة بنجاح في قاعدة البيانات.")
             elif st == "waiting_bot_url":
                 temp_bot_data[chat_id] = {"url": text.strip()}
                 admin_states[chat_id] = "waiting_bot_name"
                 send_telegram_message(chat_id, "أرسل اسم البوت الظاهر للمستخدم:")
             elif st == "waiting_bot_name":
                 b_url = temp_bot_data.pop(chat_id, {}).get("url", "")
-                forced_bots.append({"name": text.strip(), "url": b_url})
+                b_name = text.strip()
+                cursor.execute("INSERT INTO forced_bots (bot_name, bot_url) VALUES (%s, %s) ON CONFLICT (bot_name) DO UPDATE SET bot_url = EXCLUDED.bot_url", (b_name, b_url))
+                db.commit()
                 user_task_progress.clear()
-                send_telegram_message(chat_id, "✅ تمت إضافة البوت بنجاح.")
+                send_telegram_message(chat_id, "✅ تمت إضافة البوت بنجاح في قاعدة البيانات.")
             cursor.close(); db.close()
             return "OK", 200
 
