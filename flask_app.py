@@ -7,7 +7,7 @@ from datetime import datetime
 from psycopg2.extras import RealDictCursor
 import psycopg2
 
-BOT_TOKEN = "8785452517:AAGy-93isP7k1qQxO_LIDb7yZMjieDhJFiw"
+BOT_TOKEN = "8785452517:AAHMx52E3En4ZBj4ZbL0BG2LRHyx9-V5nxo"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 ADMIN_IDS = [8667934765, 8557464787]
