@@ -13,7 +13,7 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 ADMIN_IDS = [8667934765, 8557464787]
 PRIMARY_ADMIN_USERNAME = "@m9aws"
 PROOF_CHANNEL_ID = "@Proofsofbotwithdrawal"
-ADMIN_WEB_KEY = "zoro_admin_secure_123"
+ADMIN_CHANNEL_ID = "@YourAdminChannelID" # ضع معرف قناة المشرفين الخاصة بطلبات السحب هنا
 
 bot_settings = {
     "referral_reward": 0.01,
@@ -39,39 +39,44 @@ temp_bot_data = {}
 broadcast_data = {}
 def init_db():
     if not DATABASE_URL:
+        print("⚠ تحذير: متغير DATABASE_URL غير موجود!")
         return
-    conn = psycopg2.connect(DATABASE_URL)
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
-                        chat_id BIGINT PRIMARY KEY,
-                        username TEXT,
-                        balance REAL DEFAULT 0.0,
-                        wallet TEXT,
-                        verified INTEGER DEFAULT 0,
-                        banned INTEGER DEFAULT 0,
-                        invited_by BIGINT,
-                        last_active DOUBLE PRECISION
-                    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS fingerprints (
-                        fingerprint TEXT PRIMARY KEY,
-                        chat_id BIGINT
-                    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS referrals (
-                        referrer_id BIGINT,
-                        referred_id BIGINT,
-                        PRIMARY KEY (referrer_id, referred_id)
-                    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS pending_withdrawals (
-                        w_id TEXT PRIMARY KEY,
-                        user_id BIGINT,
-                        amount REAL,
-                        wallet TEXT,
-                        username TEXT,
-                        tx_hash TEXT
-                    )''')
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+                            chat_id BIGINT PRIMARY KEY,
+                            username TEXT,
+                            balance REAL DEFAULT 0.0,
+                            wallet TEXT,
+                            verified INTEGER DEFAULT 0,
+                            banned INTEGER DEFAULT 0,
+                            invited_by BIGINT,
+                            last_active DOUBLE PRECISION
+                        )''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS fingerprints (
+                            fingerprint TEXT PRIMARY KEY,
+                            chat_id BIGINT
+                        )''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS referrals (
+                            referrer_id BIGINT,
+                            referred_id BIGINT,
+                            PRIMARY KEY (referrer_id, referred_id)
+                        )''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS pending_withdrawals (
+                            w_id TEXT PRIMARY KEY,
+                            user_id BIGINT,
+                            amount REAL,
+                            wallet TEXT,
+                            username TEXT,
+                            tx_hash TEXT
+                        )''')
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✅ تم الاتصال بقاعدة البيانات وتحديث الجداول بنجاح.")
+    except Exception as e:
+        print(f"❌ حدث خطأ أثناء الاتصال بقاعدة البيانات: {e}")
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
@@ -120,63 +125,6 @@ HTML_TEMPLATE = """
                         document.getElementById('status').innerText = data.message || "❌ خطأ!"; 
                     }
                 });
-            });
-        }
-    </script>
-</body>
-</html>
-"""
-
-ADMIN_DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <title>لوحة تحكم المشرف</title>
-    <style>
-        body { font-family: Tahoma, sans-serif; background: #0f172a; color: #fff; padding: 20px; }
-        .container { max-width: 900px; margin: auto; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #1e293b; border-radius: 8px; overflow: hidden; }
-        th, td { padding: 12px; text-align: center; border-bottom: 1px solid #334155; }
-        th { background: #334155; }
-        .btn-approve { background: #22c55e; color: white; border: none; padding: 8px 12px; cursor: pointer; border-radius: 6px; }
-        .btn-reject { background: #ef4444; color: white; border: none; padding: 8px 12px; cursor: pointer; border-radius: 6px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h2>📦 لوحة طلبات السحب</h2>
-        <table>
-            <thead>
-                <tr><th>المستخدم</th><th>ID</th><th>الكمية</th><th>المحفظة</th><th>الإجراء</th></tr>
-            </thead>
-            <tbody>
-                {% for req in requests %}
-                <tr id="row-{{ req.w_id }}">
-                    <td>@{{ req.username }}</td>
-                    <td><code>{{ req.user_id }}</code></td>
-                    <td>{{ req.amount }} TON</td>
-                    <td>{{ req.wallet }}</td>
-                    <td>
-                        <button class="btn-approve" onclick="processReq('{{ req.w_id }}', 'approve')">قبول</button>
-                        <button class="btn-reject" onclick="processReq('{{ req.w_id }}', 'reject')">رفض</button>
-                    </td>
-                </tr>
-                {% else %}
-                <tr><td colspan="5" style="text-align:center; padding:20px;">لا توجد طلبات معلقة.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    <script>
-        const adminKey = "{{ key }}";
-        function processReq(wId, action) {
-            fetch('/admin/dashboard/process?key=' + encodeURIComponent(adminKey), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ w_id: wId, action: action })
-            }).then(res => res.json()).then(data => {
-                if(data.success) document.getElementById('row-' + wId).remove();
             });
         }
     </script>
@@ -280,52 +228,6 @@ init_db()
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/admin/dashboard')
-def admin_dashboard():
-    if request.args.get('key') != ADMIN_WEB_KEY:
-        return "<h2 style='color:red; text-align:center;'>🚫 غير مسموح بالدخول.</h2>", 403
-    db = get_db()
-    cursor = db.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT * FROM pending_withdrawals")
-    reqs = cursor.fetchall()
-    cursor.close()
-    db.close()
-    return render_template_string(ADMIN_DASHBOARD_HTML, requests=reqs, key=ADMIN_WEB_KEY)
-
-@app.route('/admin/dashboard/process', methods=['POST'])
-def admin_dashboard_process():
-    if request.args.get('key') != ADMIN_WEB_KEY:
-        return jsonify({'success': False}), 403
-    data = request.json or {}
-    w_id, action = data.get('w_id'), data.get('action')
-    if not w_id or not action: return jsonify({'success': False}), 400
-
-    db = get_db()
-    cursor = db.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT * FROM pending_withdrawals WHERE w_id = %s", (w_id,))
-    w_row = cursor.fetchone()
-    if not w_row:
-        cursor.close(); db.close()
-        return jsonify({'success': False}), 404
-
-    u_id, amount, wallet, username, tx_hash = w_row["user_id"], w_row["amount"], w_row["wallet"], w_row["username"], w_row["tx_hash"]
-    cursor.execute("DELETE FROM pending_withdrawals WHERE w_id = %s", (w_id,))
-    db.commit()
-
-    if action == "approve":
-        time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        proof_text = f"💎 **Payment Successful!**\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` TON\n📥 المحفظة: `{wallet}`\n⏰ التوقيت: `{time_str}`"
-        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": PROOF_CHANNEL_ID, "text": proof_text, "parse_mode": "Markdown"})
-        send_telegram_message(u_id, f"🎉 **تم قبول طلب سحبك بنجاح!**\n💵 الكمية: `{amount} TON`")
-    elif action == "reject":
-        if u_id not in ADMIN_IDS:
-            cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (amount, u_id))
-            db.commit()
-        send_telegram_message(u_id, f"❌ **عذراً، تم رفض طلب سحبك (`{amount} TON`) وإعادة الرصيد.**")
-
-    cursor.close(); db.close()
-    return jsonify({'success': True})
-
 @app.route('/verify', methods=['POST'])
 def verify():
     data = request.json or {}
@@ -355,7 +257,7 @@ def verify():
     if f_row and f_row["chat_id"] != user_id:
         cursor.execute("UPDATE users SET banned = 1 WHERE chat_id = %s", (user_id,))
         db.commit(); cursor.close(); db.close()
-        return jsonify({'success': False, 'message': '🚫 حظر لمخالفة سياسة الحساب الواحد! لم تُمنح أي مكافأة للمحيل.'}), 403
+        return jsonify({'success': False, 'message': '🚫 حظر لمخالفة سياسة الحساب الواحد! لم تُمنح أي مكافأة.'}), 403
 
     cursor.execute("INSERT INTO fingerprints (fingerprint, chat_id) VALUES (%s, %s) ON CONFLICT (fingerprint) DO UPDATE SET chat_id = EXCLUDED.chat_id", (fingerprint, user_id))
     db.commit()
@@ -388,17 +290,52 @@ def webhook():
 
     if "callback_query" in update:
         cb = update["callback_query"]
-        if cb["message"]["chat"].get("type") in ["group", "supergroup"]:
-            try: requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb["id"]})
-            except Exception: pass
-            return "OK", 200
-
         cb_id, chat_id, data = cb["id"], cb["message"]["chat"]["id"], cb.get("data", "")
-        try: requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id})
-        except Exception: pass
-
+        
         db = get_db()
         cursor = db.cursor(cursor_factory=RealDictCursor)
+
+        if data.startswith("adm_approve_") or data.startswith("adm_reject_"):
+            member_check = requests.get(f"{TELEGRAM_API_URL}/getChatMember", params={"chat_id": ADMIN_CHANNEL_ID, "user_id": chat_id}).json()
+            if not member_check.get("ok") or member_check["result"]["status"] not in ["creator", "administrator"]:
+                requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Only Admin Can Do This", "show_alert": True})
+                cursor.close(); db.close()
+                return "OK", 200
+
+            action = "approve" if "approve" in data else "reject"
+            w_id = data.replace("adm_approve_", "").replace("adm_reject_", "")
+
+            cursor.execute("SELECT * FROM pending_withdrawals WHERE w_id = %s", (w_id,))
+            w_row = cursor.fetchone()
+            if not w_row:
+                requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "الطلب غير موجود أو تم معالجته مسبقاً!", "show_alert": True})
+                cursor.close(); db.close()
+                return "OK", 200
+
+            u_id, amount, wallet, username, tx_hash = w_row["user_id"], w_row["amount"], w_row["wallet"], w_row["username"], w_row["tx_hash"]
+            cursor.execute("DELETE FROM pending_withdrawals WHERE w_id = %s", (w_id,))
+            db.commit()
+
+            if action == "approve":
+                time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                proof_text = f"💎 **Payment Successful!**\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` TON\n📥 المحفظة: `{wallet}`\n⏰ التوقيت: `{time_str}`"
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": PROOF_CHANNEL_ID, "text": proof_text, "parse_mode": "Markdown"})
+                send_telegram_message(u_id, f"🎉 **تم قبول طلب سحبك بنجاح!**\n💵 الكمية: `{amount} TON`")
+                new_text = cb["message"]["text"] + f"\n\n✅ **Approved by Admin**"
+            else:
+                if u_id not in ADMIN_IDS:
+                    cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (amount, u_id))
+                    db.commit()
+                send_telegram_message(u_id, f"❌ **عذراً، تم رفض طلب سحبك (`{amount} TON`) وإعادة الرصيد.**")
+                new_text = cb["message"]["text"] + f"\n\n❌ **Rejected by Admin**"
+
+            requests.post(f"{TELEGRAM_API_URL}/editMessageText", json={"chat_id": chat_id, "message_id": cb["message"]["message_id"], "text": new_text, "parse_mode": "Markdown"})
+            requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "تمت العملية بنجاح"})
+            cursor.close(); db.close()
+            return "OK", 200
+
+        try: requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id})
+        except Exception: pass
 
         if chat_id in ADMIN_IDS:
             if data == "start_broadcast":
@@ -474,7 +411,6 @@ def webhook():
             send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت NeoEarnbot ⚡")
             return "OK", 200
 
-        # فحص المهام الإجبارية والتوثيق عند الضغط على أي زر داخل البوت
         if not check_and_prompt_tasks(chat_id):
             cursor.close(); db.close()
             return "OK", 200
@@ -546,8 +482,21 @@ def webhook():
                 w_id = hashlib.md5(f"{chat_id}_{time.time()}".encode()).hexdigest()[:10]
                 tx_hash = hashlib.sha256(f"{w_id}_{amount}".encode()).hexdigest()[:24]
                 cursor.execute("INSERT INTO pending_withdrawals VALUES (%s, %s, %s, %s, %s, %s)", (w_id, chat_id, amount, urow["wallet"], username, tx_hash))
-                db.commit(); cursor.close(); db.close()
-                send_telegram_message(chat_id, f"✅ **تم إرسال طلب السحب (`{amount} TON`) بنجاح وهو قيد المراجعة بالموقع.**")
+                db.commit()
+
+                admin_markup = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "✅ Approve", "callback_data": f"adm_approve_{w_id}"},
+                            {"text": "❌ Reject", "callback_data": f"adm_reject_{w_id}"}
+                        ]
+                    ]
+                }
+                withdrawal_text = f"💎 **New Payout Request**\n\n📌 User : `{chat_id}` (@{username})\n💵 Amount : `{amount} TON`\n📥 Send To (Address): `{urow['wallet']}`\n📄 Transaction ID:\n`{tx_hash}`"
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": ADMIN_CHANNEL_ID, "text": withdrawal_text, "parse_mode": "Markdown", "reply_markup": admin_markup})
+
+                cursor.close(); db.close()
+                send_telegram_message(chat_id, f"✅ **تم إرسال طلب السحب (`{amount} TON`) بنجاح وهو قيد المراجعة من الإدارة.**")
                 send_main_menu(chat_id, "القائمة الرئيسية:")
                 return "OK", 200
 
