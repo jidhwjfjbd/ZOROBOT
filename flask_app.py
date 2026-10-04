@@ -10,7 +10,7 @@ import psycopg2
 BOT_TOKEN = "8785452517:AAHMx52E3En4ZBj4ZbL0BG2LRHyx9-V5nxo"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-ADMIN_IDS = [8667934765, 8557464787]
+ADMIN_IDS = [8667934765, 8557464787, 8162975871]
 PRIMARY_ADMIN_USERNAME = "@m9aws"
 PROOF_CHANNEL_ID = "@Proofsofbotwithdrawal"
 ADMIN_CHANNEL_ID = "-1003509587836"
@@ -37,9 +37,9 @@ admin_states = {}
 user_states = {}      
 temp_bot_data = {}    
 broadcast_data = {}
+
 def init_db():
     if not DATABASE_URL:
-        print("⚠ تحذير: متغير DATABASE_URL غير موجود!")
         return
     try:
         conn = psycopg2.connect(DATABASE_URL)
@@ -74,13 +74,11 @@ def init_db():
         conn.commit()
         cursor.close()
         conn.close()
-        print("✅ تم الاتصال بقاعدة البيانات وتحديث الجداول بنجاح.")
-    except Exception as e:
-        print(f"❌ حدث خطأ أثناء الاتصال بقاعدة البيانات: {e}")
+    except Exception:
+        pass
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
-
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -140,25 +138,20 @@ def send_telegram_message(chat_id, text, reply_markup=None, parse_mode="Markdown
 def get_next_pending_task(chat_id):
     if chat_id in ADMIN_IDS:
         return "done", None
-
     progress = user_task_progress.setdefault(chat_id, {"bots_done": False, "bot_repeat_count": 0})
-
     if forced_bots and not progress["bots_done"]:
         if progress.get("bot_repeat_count", 0) < 4:
             return "bots_all", forced_bots
         else:
             progress["bots_done"] = True
-
     db = get_db()
     cursor = db.cursor(cursor_factory=RealDictCursor)
     cursor.execute("SELECT verified FROM users WHERE chat_id = %s", (chat_id,))
     row = cursor.fetchone()
     cursor.close()
     db.close()
-    
     if not (row and row["verified"]):
         return "webapp", None
-
     return "done", None
 
 def check_and_prompt_tasks(chat_id):
@@ -234,7 +227,7 @@ def verify():
     if f_row and f_row["chat_id"] != user_id:
         cursor.execute("UPDATE users SET banned = 1 WHERE chat_id = %s", (user_id,))
         db.commit(); cursor.close(); db.close()
-        return jsonify({'success': False, 'message': '🚫 حظر لمخالفة سياسة الحساب الواحد! لم تُمنح أي مكافأة.'}), 403
+        return jsonify({'success': False, 'message': '🚫 حظر لمخالفة سياسة الحساب الواحد!'}), 403
 
     cursor.execute("INSERT INTO fingerprints (fingerprint, chat_id) VALUES (%s, %s) ON CONFLICT (fingerprint) DO UPDATE SET chat_id = EXCLUDED.chat_id", (fingerprint, user_id))
     db.commit()
@@ -268,14 +261,14 @@ def webhook():
     if "callback_query" in update:
         cb = update["callback_query"]
         cb_id, chat_id, data = cb["id"], cb["message"]["chat"]["id"], cb.get("data", "")
+        user_who_clicked = cb["from"]["id"]
         
         db = get_db()
         cursor = db.cursor(cursor_factory=RealDictCursor)
 
         if data.startswith("adm_approve_") or data.startswith("adm_reject_"):
-            # تم تعديل الشرط هنا ليتحقق من أن الضاغط هو أحد المشرفين المسجلين في ADMIN_IDS لتجاوز مشاكل صلاحيات القنوات
-            if chat_id not in ADMIN_IDS:
-                requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Only Admin Can Do This", "show_alert": True})
+            if user_who_clicked not in ADMIN_IDS:
+                requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "هذا الزر مخصص للأدمن فقط!", "show_alert": True})
                 cursor.close(); db.close()
                 return "OK", 200
 
@@ -314,48 +307,39 @@ def webhook():
         try: requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id})
         except Exception: pass
 
-        if chat_id in ADMIN_IDS:
+        if user_who_clicked in ADMIN_IDS:
             if data == "start_broadcast":
-                admin_states[chat_id] = "waiting_broadcast"
-                send_telegram_message(chat_id, "📢 أرسل الرسالة التي تريد إذاعتها:")
+                admin_states[user_who_clicked] = "waiting_broadcast"
+                send_telegram_message(user_who_clicked, "📢 أرسل الرسالة التي تريد إذاعتها:")
             elif data == "set_ref_reward":
-                admin_states[chat_id] = "waiting_ref_reward"
-                send_telegram_message(chat_id, "✍️ أدخل سعر الإحالة الجديد:")
+                admin_states[user_who_clicked] = "waiting_ref_reward"
+                send_telegram_message(user_who_clicked, "✍️️ أدخل سعر الإحالة الجديد:")
             elif data == "set_min_withdrawal":
-                admin_states[chat_id] = "waiting_min_withdrawal"
-                send_telegram_message(chat_id, "✍️ أدخل الحد الأدنى للسحب:")
+                admin_states[user_who_clicked] = "waiting_min_withdrawal"
+                send_telegram_message(user_who_clicked, "✍️ أدخل الحد الأدنى للسحب:")
             elif data == "add_channel":
-                admin_states[chat_id] = "waiting_add_channel"
-                send_telegram_message(chat_id, "📢 أرسل معرف القناة (مثال: `@Channel`):")
+                admin_states[user_who_clicked] = "waiting_add_channel"
+                send_telegram_message(user_who_clicked, "📢 أرسل معرف القناة (مثال: `@Channel`):")
             elif data == "del_channel" and forced_channels:
                 buttons = [[{"text": f"🗑 {ch}", "callback_data": f"remove_ch_{ch}"}] for ch in forced_channels]
-                send_telegram_message(chat_id, "اختر القناة للحذف:", reply_markup={"inline_keyboard": buttons})
+                send_telegram_message(user_who_clicked, "اختر القناة للحذف:", reply_markup={"inline_keyboard": buttons})
             elif data.startswith("remove_ch_"):
                 ch = data.replace("remove_ch_", "")
                 if ch in forced_channels: forced_channels.remove(ch)
-                send_telegram_message(chat_id, f"✅ تم حذف القناة `{ch}`.")
+                send_telegram_message(user_who_clicked, f"✅ تم حذف القناة `{ch}`.")
             elif data == "add_bot":
-                admin_states[chat_id] = "waiting_bot_url"
-                send_telegram_message(chat_id, "🤖 أرسل رابط البوت الإجباري:")
+                admin_states[user_who_clicked] = "waiting_bot_url"
+                send_telegram_message(user_who_clicked, "🤖 أرسل رابط البوت الإجباري:")
             elif data == "del_bot" and forced_bots:
                 buttons = [[{"text": f"🗑 {b['name']}", "callback_data": f"remove_bot_{b['name']}"}] for b in forced_bots]
-                send_telegram_message(chat_id, "اختر البوت للحذف:", reply_markup={"inline_keyboard": buttons})
+                send_telegram_message(user_who_clicked, "اختر البوت للحذف:", reply_markup={"inline_keyboard": buttons})
             elif data.startswith("remove_bot_"):
                 b_name = data.replace("remove_bot_", "")
                 forced_bots[:] = [b for b in forced_bots if b['name'] != b_name]
-                send_telegram_message(chat_id, "✅ تم حذف البوت.")
+                send_telegram_message(user_who_clicked, "✅ تم حذف البوت.")
             elif data == "confirm_broadcast":
-                execute_broadcast(chat_id)
+                execute_broadcast(user_who_clicked)
             cursor.close(); db.close()
-            return "OK", 200
-
-        if chat_id not in ADMIN_IDS and data in ["check_next_task", "click_all_bots"]:
-            if data == "click_all_bots":
-                p = user_task_progress.setdefault(chat_id, {"bots_done": False, "bot_repeat_count": 0})
-                p["bot_repeat_count"] = p.get("bot_repeat_count", 0) + 1
-                if p["bot_repeat_count"] >= 4: p["bots_done"] = True
-            cursor.close(); db.close()
-            check_and_prompt_tasks(chat_id)
             return "OK", 200
 
         cursor.close(); db.close()
@@ -502,7 +486,7 @@ def webhook():
         elif text == "💳 ربط المحفظة":
             user_states[chat_id] = "waiting_wallet"
             cursor.close(); db.close()
-            send_telegram_message(chat_id, "💳 أرسل عنوان محفظة TON الخاصة بك:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
+            send_telegram_message(chat_id, f"💳 أرسل عنوان محفظة TON الخاصة بك:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
             return "OK", 200
 
         elif text == "📊 إحصائيات البوت":
