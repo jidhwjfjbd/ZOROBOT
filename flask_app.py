@@ -13,7 +13,7 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 ADMIN_IDS = [8667934765, 8557464787]
 PRIMARY_ADMIN_USERNAME = "@m9aws"
 PROOF_CHANNEL_ID = "@Proofsofbotwithdrawal"
-ADMIN_CHANNEL_ID = "@-1003509587836"
+ADMIN_CHANNEL_ID = "-1003509587836"
 
 bot_settings = {
     "referral_reward": 0.01,
