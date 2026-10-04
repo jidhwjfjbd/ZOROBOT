@@ -13,7 +13,7 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 ADMIN_IDS = [8667934765, 8557464787]
 PRIMARY_ADMIN_USERNAME = "@m9aws"
 PROOF_CHANNEL_ID = "@Proofsofbotwithdrawal"
-ADMIN_CHANNEL_ID = "@YourAdminChannelID" # ضع معرف قناة المشرفين الخاصة بطلبات السحب هنا
+ADMIN_CHANNEL_ID = "@YourAdminChannelID"
 
 bot_settings = {
     "referral_reward": 0.01,
@@ -30,7 +30,7 @@ except Exception:
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-forced_channels = [] # تم جعلها فارغة تماماً بناءً على طلبك
+forced_channels = []
 forced_bots = []      
 user_task_progress = {} 
 admin_states = {}
@@ -141,26 +141,7 @@ def get_next_pending_task(chat_id):
     if chat_id in ADMIN_IDS:
         return "done", None
 
-    progress = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
-
-    if forced_channels:
-        missing_channels = []
-        for ch in forced_channels:
-            clean_ch = ch.strip()
-            try:
-                res = requests.get(f"{TELEGRAM_API_URL}/getChatMember", params={"chat_id": clean_ch, "user_id": chat_id}).json()
-                if not res.get("ok") or res["result"]["status"] not in ["creator", "administrator", "member"]:
-                    missing_channels.append(clean_ch)
-            except Exception:
-                missing_channels.append(clean_ch)
-        
-        if missing_channels:
-            progress["channels_done"] = False
-            return "channel", missing_channels
-        else:
-            progress["channels_done"] = True
-    else:
-        progress["channels_done"] = True
+    progress = user_task_progress.setdefault(chat_id, {"bots_done": False, "bot_repeat_count": 0})
 
     if forced_bots and not progress["bots_done"]:
         if progress.get("bot_repeat_count", 0) < 4:
@@ -183,11 +164,7 @@ def get_next_pending_task(chat_id):
 def check_and_prompt_tasks(chat_id):
     task_type, data = get_next_pending_task(chat_id)
     if task_type != "done":
-        if task_type == "channel":
-            buttons = [[{"text": f"📢 انضمام إلى {ch}", "url": f"https://t.me/{ch.replace('@', '')}"}] for ch in data]
-            buttons.append([{"text": "✅ تحقق من الاشتراك", "callback_data": "check_next_task"}])
-            requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "⚠️ **يجب الانضمام للقنوات الإجبارية أولاً للاستمرار:**", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
-        elif task_type == "bots_all":
+        if task_type == "bots_all":
             buttons = [[{"text": f"🤖 تسجيل في بوت: {b['name']}", "url": b['url'] if b['url'].startswith('http') else f"https://t.me/{b['url'].replace('@', '')}"}] for b in data]
             buttons.append([{"text": "✅ تحقق من التسجيل", "callback_data": "click_all_bots"}])
             requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🤖 **مهام البوتات الإجبارية:**\nسجل في البوتات ثم اضغط التحقق.", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
@@ -374,7 +351,7 @@ def webhook():
 
         if chat_id not in ADMIN_IDS and data in ["check_next_task", "click_all_bots"]:
             if data == "click_all_bots":
-                p = user_task_progress.setdefault(chat_id, {"channels_done": False, "bots_done": False, "bot_repeat_count": 0})
+                p = user_task_progress.setdefault(chat_id, {"bots_done": False, "bot_repeat_count": 0})
                 p["bot_repeat_count"] = p.get("bot_repeat_count", 0) + 1
                 if p["bot_repeat_count"] >= 4: p["bots_done"] = True
             cursor.close(); db.close()
