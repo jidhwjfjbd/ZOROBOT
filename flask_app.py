@@ -30,7 +30,7 @@ except Exception:
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-forced_channels = []
+forced_channels = [] # تم جعلها فارغة تماماً بناءً على طلبك
 forced_bots = []      
 user_task_progress = {} 
 admin_states = {}
