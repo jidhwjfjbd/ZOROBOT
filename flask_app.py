@@ -138,12 +138,27 @@ def send_telegram_message(chat_id, text, reply_markup=None, parse_mode="Markdown
 def get_next_pending_task(chat_id):
     if chat_id in ADMIN_IDS:
         return "done", None
-    progress = user_task_progress.setdefault(chat_id, {"bots_done": False, "bot_repeat_count": 0})
+        
+    progress = user_task_progress.setdefault(chat_id, {"bots_done": False, "bot_clicks": 0})
+    
+    # 1. فحص البوتات الإجبارية (يجب الضغط مرتين وتأكيدها)
     if forced_bots and not progress["bots_done"]:
-        if progress.get("bot_repeat_count", 0) < 4:
+        if progress["bot_clicks"] < 2:
             return "bots_all", forced_bots
         else:
             progress["bots_done"] = True
+
+    # 2. فحص القنوات الإجبارية
+    for ch in forced_channels:
+        try:
+            res = requests.get(f"{TELEGRAM_API_URL}/getChatMember", json={"chat_id": ch, "user_id": chat_id}).json()
+            status = res.get("result", {}).get("status")
+            if status not in ["member", "administrator", "creator"]:
+                return "channel", ch
+        except Exception:
+            pass
+
+    # 3. فحص توثيق الويب أب (WebApp)
     db = get_db()
     cursor = db.cursor(cursor_factory=RealDictCursor)
     cursor.execute("SELECT verified FROM users WHERE chat_id = %s", (chat_id,))
@@ -152,6 +167,7 @@ def get_next_pending_task(chat_id):
     db.close()
     if not (row and row["verified"]):
         return "webapp", None
+
     return "done", None
 
 def check_and_prompt_tasks(chat_id):
@@ -159,11 +175,29 @@ def check_and_prompt_tasks(chat_id):
     if task_type != "done":
         if task_type == "bots_all":
             buttons = [[{"text": f"🤖 تسجيل في بوت: {b['name']}", "url": b['url'] if b['url'].startswith('http') else f"https://t.me/{b['url'].replace('@', '')}"}] for b in data]
-            buttons.append([{"text": "✅ تحقق من التسجيل", "callback_data": "click_all_bots"}])
-            requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🤖 **مهام البوتات الإجبارية:**\nسجل في البوتات ثم اضغط التحقق.", "reply_markup": {"inline_keyboard": buttons}, "parse_mode": "Markdown"})
+            buttons.append([{"text": "✅ تحقق من التسجيل", "callback_data": "check_bots_step"}])
+            requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
+                "chat_id": chat_id, 
+                "text": "🤖 **مهام البوتات الإجبارية:**\nيجب عليك الانضمام لجميع البوتات أولاً ثم الضغط على زر التحقق مرتين لتأكيد انضمامك والاستمرار:", 
+                "reply_markup": {"inline_keyboard": buttons}, 
+                "parse_mode": "Markdown"
+            })
+        elif task_type == "channel":
+            ch_link = f"https://t.me/{data.replace('@', '')}" if not data.startswith("-100") else f"https://t.me/+{data}"
+            requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
+                "chat_id": chat_id, 
+                "text": f"📢 **يجب عليك الانضمام إلى قناة البوت أولاً لتتمكن من استخدام البوت:**\n\n👉 {data}", 
+                "reply_markup": {"inline_keyboard": [[{"text": "📢 انضم للقناة", "url": ch_link}], [{"text": "✅ تحققت من الانضمام", "callback_data": "check_channel"}]]}, 
+                "parse_mode": "Markdown"
+            })
         elif task_type == "webapp":
             render_domain = os.environ.get("RENDER_EXTERNAL_URL", "https://zorobot-qbm3.onrender.com")
-            requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "🛡 **الخطوة الأخيرة:** قم بتوثيق جهازك لتنشيط الحساب:", "reply_markup": {"inline_keyboard": [[{"text": "🛡 توثيق الجهاز الآن", "web_app": {"url": render_domain}}]]}, "parse_mode": "Markdown"})
+            requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={
+                "chat_id": chat_id, 
+                "text": "🛡 **الخطوة الأخيرة:** قم بتوثيق جهازك لتنشيط الحساب:", 
+                "reply_markup": {"inline_keyboard": [[{"text": "🛡 توثيق الجهاز الآن", "web_app": {"url": render_domain}}]]}, 
+                "parse_mode": "Markdown"
+            })
         return False
     return True
 
@@ -266,6 +300,38 @@ def webhook():
         db = get_db()
         cursor = db.cursor(cursor_factory=RealDictCursor)
 
+        # التعامل مع أزرار التحقق من مهام البوتات أو القنوات
+        if data == "check_bots_step":
+            prog = user_task_progress.setdefault(user_who_clicked, {"bots_done": False, "bot_clicks": 0})
+            prog["bot_clicks"] += 1
+            if prog["bot_clicks"] == 1:
+                requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "⚠️ يرجى التأكد من الانضمام لجميع البوتات أولاً ثم اضغط تحقق مرة أخرى!", "show_alert": True})
+            else:
+                prog["bots_done"] = True
+                requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "✅ تم التحقق بنجاح!"})
+            
+            # حذف رسالة الأزرار القديمة وإعادة فحص المهام التالية
+            try:
+                requests.post(f"{TELEGRAM_API_URL}/deleteMessage", json={"chat_id": user_who_clicked, "message_id": cb["message"]["message_id"]})
+            except Exception:
+                pass
+            
+            cursor.close(); db.close()
+            if check_and_prompt_tasks(user_who_clicked):
+                send_main_menu(user_who_clicked, "✨ أهلاً بك في القائمة الرئيسية:")
+            return "OK", 200
+
+        if data == "check_channel":
+            requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "جاري التحقق..."})
+            try:
+                requests.post(f"{TELEGRAM_API_URL}/deleteMessage", json={"chat_id": user_who_clicked, "message_id": cb["message"]["message_id"]})
+            except Exception:
+                pass
+            cursor.close(); db.close()
+            if check_and_prompt_tasks(user_who_clicked):
+                send_main_menu(user_who_clicked, "✨ أهلاً بك في القائمة الرئيسية:")
+            return "OK", 200
+
         if data.startswith("adm_approve_") or data.startswith("adm_reject_"):
             if user_who_clicked not in ADMIN_IDS:
                 requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "هذا الزر مخصص للأدمن فقط!", "show_alert": True})
@@ -313,7 +379,7 @@ def webhook():
                 send_telegram_message(user_who_clicked, "📢 أرسل الرسالة التي تريد إذاعتها:")
             elif data == "set_ref_reward":
                 admin_states[user_who_clicked] = "waiting_ref_reward"
-                send_telegram_message(user_who_clicked, "✍️️ أدخل سعر الإحالة الجديد:")
+                send_telegram_message(user_who_clicked, "✍️ أدخل سعر الإحالة الجديد:")
             elif data == "set_min_withdrawal":
                 admin_states[user_who_clicked] = "waiting_min_withdrawal"
                 send_telegram_message(user_who_clicked, "✍️ أدخل الحد الأدنى للسحب:")
@@ -372,6 +438,7 @@ def webhook():
             send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت NeoEarnbot ⚡")
             return "OK", 200
 
+        # فحص إلزامي للمهام قبل تنفيذ أي أمر أو زر عادي
         if not check_and_prompt_tasks(chat_id):
             cursor.close(); db.close()
             return "OK", 200
