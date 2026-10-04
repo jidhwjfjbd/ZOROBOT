@@ -273,8 +273,8 @@ def webhook():
         cursor = db.cursor(cursor_factory=RealDictCursor)
 
         if data.startswith("adm_approve_") or data.startswith("adm_reject_"):
-            member_check = requests.get(f"{TELEGRAM_API_URL}/getChatMember", params={"chat_id": ADMIN_CHANNEL_ID, "user_id": chat_id}).json()
-            if not member_check.get("ok") or member_check["result"]["status"] not in ["creator", "administrator"]:
+            # تم تعديل الشرط هنا ليتحقق من أن الضاغط هو أحد المشرفين المسجلين في ADMIN_IDS لتجاوز مشاكل صلاحيات القنوات
+            if chat_id not in ADMIN_IDS:
                 requests.post(f"{TELEGRAM_API_URL}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Only Admin Can Do This", "show_alert": True})
                 cursor.close(); db.close()
                 return "OK", 200
