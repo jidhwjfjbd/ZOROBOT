@@ -16,8 +16,8 @@ PROOF_CHANNEL_ID = "@Proofsofbotwithdrawal"
 ADMIN_CHANNEL_ID = "-1003509587836"
 
 bot_settings = {
-    "referral_reward": 0.01,
-    "min_withdrawal": 0.01
+    "referral_reward": 0.1,
+    "min_withdrawal": 1.0
 }
 
 BOT_USERNAME = "NeoEarnbot"
@@ -35,7 +35,6 @@ admin_states = {}
 user_states = {}      
 temp_bot_data = {}    
 broadcast_data = {}
-
 def init_db():
     if not DATABASE_URL:
         return
@@ -69,11 +68,9 @@ def init_db():
                             username TEXT,
                             tx_hash TEXT
                         )''')
-        # جدول قنوات الاشتراك الإجباري الدائم
         cursor.execute('''CREATE TABLE IF NOT EXISTS forced_channels (
                             channel_username TEXT PRIMARY KEY
                         )''')
-        # جدول بوتات الاشتراك الإجباري الدائم
         cursor.execute('''CREATE TABLE IF NOT EXISTS forced_bots (
                             bot_name TEXT PRIMARY KEY,
                             bot_url TEXT
@@ -86,6 +83,7 @@ def init_db():
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -151,11 +149,9 @@ def get_next_pending_task(chat_id):
     db = get_db()
     cursor = db.cursor(cursor_factory=RealDictCursor)
     
-    # جلب البوتات الإجبارية من قاعدة البيانات
     cursor.execute("SELECT * FROM forced_bots")
     forced_bots = cursor.fetchall()
 
-    # 1. فحص البوتات الإجبارية
     if forced_bots and not progress["bots_done"]:
         if progress["bot_clicks"] < 2:
             cursor.close(); db.close()
@@ -163,13 +159,11 @@ def get_next_pending_task(chat_id):
         else:
             progress["bots_done"] = True
 
-    # جلب القنوات الإجبارية من قاعدة البيانات
     cursor.execute("SELECT channel_username FROM forced_channels")
     forced_channels = [row["channel_username"] for row in cursor.fetchall()]
     cursor.close()
     db.close()
 
-    # 2. فحص القنوات الإجبارية
     for ch in forced_channels:
         try:
             res = requests.get(f"{TELEGRAM_API_URL}/getChatMember", json={"chat_id": ch, "user_id": chat_id}).json()
@@ -179,7 +173,6 @@ def get_next_pending_task(chat_id):
         except Exception:
             pass
 
-    # 3. فحص توثيق الويب أب (WebApp)
     db = get_db()
     cursor = db.cursor(cursor_factory=RealDictCursor)
     cursor.execute("SELECT verified FROM users WHERE chat_id = %s", (chat_id,))
@@ -300,7 +293,7 @@ def verify():
             cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (reward, ref_id))
             cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (ref_id, user_id))
             db.commit()
-            send_telegram_message(ref_id, f"🎉 مستخدم جديد انضم عبر رابطك وأتم التحقق! حصلت على `{reward} TON`.")
+            send_telegram_message(ref_id, f"🎉 مستخدم جديد انضم عبر رابطك وأتم التحقق! حصلت على `{reward} USDT`.")
 
     cursor.close(); db.close()
     return jsonify({'success': True})
@@ -372,15 +365,15 @@ def webhook():
 
             if action == "approve":
                 time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                proof_text = f"💎 **Payment Successful!**\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` TON\n📥 المحفظة: `{wallet}`\n⏰ التوقيت: `{time_str}`"
+                proof_text = f"💎 **Payment Successful!**\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` USDT\n📥 المحفظة: `{wallet}`\n⏰ التوقيت: `{time_str}`"
                 requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": PROOF_CHANNEL_ID, "text": proof_text, "parse_mode": "Markdown"})
-                send_telegram_message(u_id, f"🎉 **تم قبول طلب سحبك بنجاح!**\n💵 الكمية: `{amount} TON`")
+                send_telegram_message(u_id, f"🎉 **تم قبول طلب سحبك بنجاح!**\n💵 الكمية: `{amount} USDT`")
                 new_text = cb["message"]["text"] + f"\n\n✅ **Approved by Admin**"
             else:
                 if u_id not in ADMIN_IDS:
                     cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (amount, u_id))
                     db.commit()
-                send_telegram_message(u_id, f"❌ **عذراً، تم رفض طلب سحبك (`{amount} TON`) وإعادة الرصيد.**")
+                send_telegram_message(u_id, f"❌ **عذراً، تم رفض طلب سحبك (`{amount} USDT`) وإعادة الرصيد.**")
                 new_text = cb["message"]["text"] + f"\n\n❌ **Rejected by Admin**"
 
             requests.post(f"{TELEGRAM_API_URL}/editMessageText", json={"chat_id": chat_id, "message_id": cb["message"]["message_id"], "text": new_text, "parse_mode": "Markdown"})
@@ -397,7 +390,7 @@ def webhook():
                 send_telegram_message(user_who_clicked, "📢 أرسل الرسالة التي تريد إذاعتها:")
             elif data == "set_ref_reward":
                 admin_states[user_who_clicked] = "waiting_ref_reward"
-                send_telegram_message(user_who_clicked, "✍️ أدخل سعر الإحالة الجديد:")
+                send_telegram_message(user_who_clicked, "✍ أدخل سعر الإحالة الجديد:")
             elif data == "set_min_withdrawal":
                 admin_states[user_who_clicked] = "waiting_min_withdrawal"
                 send_telegram_message(user_who_clicked, "✍️ أدخل الحد الأدنى للسحب:")
@@ -411,7 +404,7 @@ def webhook():
                     buttons = [[{"text": f"🗑 {r['channel_username']}", "callback_data": f"remove_ch_{r['channel_username']}"}] for r in ch_rows]
                     send_telegram_message(user_who_clicked, "اختر القناة للحذف:", reply_markup={"inline_keyboard": buttons})
                 else:
-                    send_telegram_message(user_who_clicked, "⚠️️ لا توجد قنوات مسجلة حالياً.")
+                    send_telegram_message(user_who_clicked, "⚠ لا توجد قنوات مسجلة حالياً.")
             elif data.startswith("remove_ch_"):
                 ch = data.replace("remove_ch_", "")
                 cursor.execute("DELETE FROM forced_channels WHERE channel_username = %s", (ch,))
@@ -440,7 +433,6 @@ def webhook():
 
         cursor.close(); db.close()
         return "OK", 200
-
     if "message" in update:
         msg = update["message"]
         chat_id, text = msg["chat"]["id"], msg.get("text", "")
@@ -552,11 +544,11 @@ def webhook():
                         ]
                     ]
                 }
-                withdrawal_text = f"💎 **New Payout Request**\n\n📌 User : `{chat_id}` (@{username})\n💵 Amount : `{amount} TON`\n📥 Send To (Address): `{urow['wallet']}`\n📄 Transaction ID:\n`{tx_hash}`"
+                withdrawal_text = f"💎 **New Payout Request**\n\n📌 User : `{chat_id}` (@{username})\n💵 Amount : `{amount} USDT`\n📥 Send To (Address): `{urow['wallet']}`\n📄 Transaction ID:\n`{tx_hash}`"
                 requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": ADMIN_CHANNEL_ID, "text": withdrawal_text, "parse_mode": "Markdown", "reply_markup": admin_markup})
 
                 cursor.close(); db.close()
-                send_telegram_message(chat_id, f"✅ **تم إرسال طلب السحب (`{amount} TON`) بنجاح وهو قيد المراجعة من الإدارة.**")
+                send_telegram_message(chat_id, f"✅ **تم إرسال طلب السحب (`{amount} USDT`) بنجاح وهو قيد المراجعة من الإدارة.**")
                 send_main_menu(chat_id, "القائمة الرئيسية:")
                 return "OK", 200
 
@@ -573,19 +565,19 @@ def webhook():
             urow = cursor.fetchone()
             cursor.close(); db.close()
             if not urow or not urow["wallet"]:
-                send_telegram_message(chat_id, "⚠️ ربط المحفظة مطلوب أولاً.")
+                send_telegram_message(chat_id, "⚠️️ ربط المحفظة مطلوب أولاً.")
                 return "OK", 200
             if urow["balance"] < bot_settings["min_withdrawal"]:
-                send_telegram_message(chat_id, f"❌ رصيدك أقل من الحد الأدنى (`{bot_settings['min_withdrawal']} TON`).")
+                send_telegram_message(chat_id, f"❌ رصيدك أقل من الحد الأدنى (`{bot_settings['min_withdrawal']} USDT`).")
                 return "OK", 200
             user_states[chat_id] = "waiting_withdraw_amount"
-            send_telegram_message(chat_id, f"💸 رصيدك المتاح: `{urow['balance']} TON`\n✍️ أرسل كمية السحب:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
+            send_telegram_message(chat_id, f"💸 رصيدك المتاح: `{urow['balance']} USDT`\n✍️ أرسل كمية السحب:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
             return "OK", 200
 
         elif text == "💳 ربط المحفظة":
             user_states[chat_id] = "waiting_wallet"
             cursor.close(); db.close()
-            send_telegram_message(chat_id, f"💳 أرسل عنوان محفظة TON الخاصة بك:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
+            send_telegram_message(chat_id, f"💳 أرسل عنوان محفظة USDT الخاصة بك:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
             return "OK", 200
 
         elif text == "📊 إحصائيات البوت":
