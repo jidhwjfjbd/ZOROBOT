@@ -16,8 +16,8 @@ PROOF_CHANNEL_ID = "@Proofsofbotwithdrawal"
 ADMIN_CHANNEL_ID = "-1003509587836"
 
 bot_settings = {
-    "referral_reward": 0.1,
-    "min_withdrawal": 1.0
+    "referral_reward": 0.01,
+    "min_withdrawal": 0.01
 }
 
 BOT_USERNAME = "NeoEarnbot"
@@ -35,6 +35,7 @@ admin_states = {}
 user_states = {}      
 temp_bot_data = {}    
 broadcast_data = {}
+
 def init_db():
     if not DATABASE_URL:
         return
@@ -239,9 +240,9 @@ def send_main_menu(chat_id, text):
         admin_inline = {"inline_keyboard": [[{"text": "📢 إذاعة جماعية", "callback_data": "start_broadcast"}], [{"text": "💰 تعديل الإحالة", "callback_data": "set_ref_reward"}, {"text": "💸 تعديل السحب", "callback_data": "set_min_withdrawal"}], [{"text": "📢 إضافة قناة", "callback_data": "add_channel"}, {"text": "🗑 حذف قناة", "callback_data": "del_channel"}], [{"text": "🤖 إضافة بوت", "callback_data": "add_bot"}, {"text": "🗑️ حذف بوت", "callback_data": "del_bot"}]]}
         requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": "📂 **لوحة التحكم الإدارية:**", "parse_mode": "Markdown", "reply_markup": admin_inline})
     send_telegram_message(chat_id, text, reply_markup=reply_keyboard)
+
 app = Flask(__name__)
 init_db()
-
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
@@ -293,7 +294,7 @@ def verify():
             cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (reward, ref_id))
             cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (ref_id, user_id))
             db.commit()
-            send_telegram_message(ref_id, f"🎉 مستخدم جديد انضم عبر رابطك وأتم التحقق! حصلت على `{reward} USDT`.")
+            send_telegram_message(ref_id, f"🎉 مستخدم جديد انضم عبر رابطك وأتم التحقق! حصلت على `{reward} TON`.")
 
     cursor.close(); db.close()
     return jsonify({'success': True})
@@ -365,15 +366,15 @@ def webhook():
 
             if action == "approve":
                 time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                proof_text = f"💎 **Payment Successful!**\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` USDT\n📥 المحفظة: `{wallet}`\n⏰ التوقيت: `{time_str}`"
+                proof_text = f"💎 **Payment Successful!**\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` TON\n📥 المحفظة: `{wallet}`\n⏰ التوقيت: `{time_str}`"
                 requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": PROOF_CHANNEL_ID, "text": proof_text, "parse_mode": "Markdown"})
-                send_telegram_message(u_id, f"🎉 **تم قبول طلب سحبك بنجاح!**\n💵 الكمية: `{amount} USDT`")
+                send_telegram_message(u_id, f"🎉 **تم قبول طلب سحبك بنجاح!**\n💵 الكمية: `{amount} TON`")
                 new_text = cb["message"]["text"] + f"\n\n✅ **Approved by Admin**"
             else:
                 if u_id not in ADMIN_IDS:
                     cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (amount, u_id))
                     db.commit()
-                send_telegram_message(u_id, f"❌ **عذراً، تم رفض طلب سحبك (`{amount} USDT`) وإعادة الرصيد.**")
+                send_telegram_message(u_id, f"❌ **عذراً، تم رفض طلب سحبك (`{amount} TON`) وإعادة الرصيد.**")
                 new_text = cb["message"]["text"] + f"\n\n❌ **Rejected by Admin**"
 
             requests.post(f"{TELEGRAM_API_URL}/editMessageText", json={"chat_id": chat_id, "message_id": cb["message"]["message_id"], "text": new_text, "parse_mode": "Markdown"})
@@ -482,7 +483,15 @@ def webhook():
                 bot_settings["min_withdrawal"] = float(text.strip())
                 send_telegram_message(chat_id, "✅ تم تحديث الحد الأدنى للسحب.")
             elif st == "waiting_add_channel":
-                cursor.execute("INSERT INTO forced_channels (channel_username) VALUES (%s) ON CONFLICT DO NOTHING", (text.strip(),))
+                channel_input = text.strip()
+                
+                # 🛑 شرط الحماية الصارم لمنع إضافة أو قبول قناة @A_TOOLSx2 نهائياً
+                if channel_input.lower() == "@a_toolsx2" or "a_toolsx2" in channel_input.lower():
+                    send_telegram_message(chat_id, "❌ عذراً، هذه القناة محظورة برمجياً ولا يمكن إضافتها كاشتراك إجباري نهائياً.")
+                    cursor.close(); db.close()
+                    return "OK", 200
+
+                cursor.execute("INSERT INTO forced_channels (channel_username) VALUES (%s) ON CONFLICT DO NOTHING", (channel_input,))
                 db.commit()
                 user_task_progress.clear()
                 send_telegram_message(chat_id, "✅ تمت إضافة القناة بنجاح في قاعدة البيانات.")
@@ -499,7 +508,6 @@ def webhook():
                 send_telegram_message(chat_id, "✅ تمت إضافة البوت بنجاح في قاعدة البيانات.")
             cursor.close(); db.close()
             return "OK", 200
-
         if chat_id in user_states:
             st = user_states.pop(chat_id)
             if st == "waiting_wallet":
@@ -544,11 +552,11 @@ def webhook():
                         ]
                     ]
                 }
-                withdrawal_text = f"💎 **New Payout Request**\n\n📌 User : `{chat_id}` (@{username})\n💵 Amount : `{amount} USDT`\n📥 Send To (Address): `{urow['wallet']}`\n📄 Transaction ID:\n`{tx_hash}`"
+                withdrawal_text = f"💎 **New Payout Request**\n\n📌 User : `{chat_id}` (@{username})\n💵 Amount : `{amount} TON`\n📥 Send To (Address): `{urow['wallet']}`\n📄 Transaction ID:\n`{tx_hash}`"
                 requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": ADMIN_CHANNEL_ID, "text": withdrawal_text, "parse_mode": "Markdown", "reply_markup": admin_markup})
 
                 cursor.close(); db.close()
-                send_telegram_message(chat_id, f"✅ **تم إرسال طلب السحب (`{amount} USDT`) بنجاح وهو قيد المراجعة من الإدارة.**")
+                send_telegram_message(chat_id, f"✅ **تم إرسال طلب السحب (`{amount} TON`) بنجاح وهو قيد المراجعة من الإدارة.**")
                 send_main_menu(chat_id, "القائمة الرئيسية:")
                 return "OK", 200
 
@@ -565,19 +573,19 @@ def webhook():
             urow = cursor.fetchone()
             cursor.close(); db.close()
             if not urow or not urow["wallet"]:
-                send_telegram_message(chat_id, "⚠️️ ربط المحفظة مطلوب أولاً.")
+                send_telegram_message(chat_id, "⚠️ ربط المحفظة مطلوب أولاً.")
                 return "OK", 200
             if urow["balance"] < bot_settings["min_withdrawal"]:
-                send_telegram_message(chat_id, f"❌ رصيدك أقل من الحد الأدنى (`{bot_settings['min_withdrawal']} USDT`).")
+                send_telegram_message(chat_id, f"❌ رصيدك أقل من الحد الأدنى (`{bot_settings['min_withdrawal']} TON`).")
                 return "OK", 200
             user_states[chat_id] = "waiting_withdraw_amount"
-            send_telegram_message(chat_id, f"💸 رصيدك المتاح: `{urow['balance']} USDT`\n✍️ أرسل كمية السحب:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
+            send_telegram_message(chat_id, f"💸 رصيدك المتاح: `{urow['balance']} TON`\n✍️ أرسل كمية السحب:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
             return "OK", 200
 
         elif text == "💳 ربط المحفظة":
             user_states[chat_id] = "waiting_wallet"
             cursor.close(); db.close()
-            send_telegram_message(chat_id, f"💳 أرسل عنوان محفظة USDT الخاصة بك:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
+            send_telegram_message(chat_id, f"💳 أرسل عنوان محفظة TON الخاصة بك:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
             return "OK", 200
 
         elif text == "📊 إحصائيات البوت":
