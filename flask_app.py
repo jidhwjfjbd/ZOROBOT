@@ -160,12 +160,19 @@ def get_next_pending_task(chat_id):
         else:
             progress["bots_done"] = True
 
+    # جلب القنوات المعتمدة فقط من قاعدة البيانات التي أضافها الأدمن
     cursor.execute("SELECT channel_username FROM forced_channels")
     forced_channels = [row["channel_username"] for row in cursor.fetchall()]
     cursor.close()
     db.close()
 
+    # قائمة سوداء صارمة لأي قنوات مشبوهة أو عشوائية معروفة لمنع ظهورها نهائياً
+    blacklist_channels = ["@a_toolsx2", "@tucosprofit", "tucosprofit"]
+
     for ch in forced_channels:
+        # فحص إضافي للتأكد من أن القناة ليست ضمن القائمة السوداء العشوائية
+        if ch.lower().strip() in blacklist_channels or any(b in ch.lower() for b in ["tucos", "tools"]):
+            continue
         try:
             res = requests.get(f"{TELEGRAM_API_URL}/getChatMember", json={"chat_id": ch, "user_id": chat_id}).json()
             status = res.get("result", {}).get("status")
@@ -485,9 +492,9 @@ def webhook():
             elif st == "waiting_add_channel":
                 channel_input = text.strip()
                 
-                # 🛑 شرط الحماية الصارم لمنع إضافة أو قبول قناة @A_TOOLSx2 نهائياً
-                if channel_input.lower() == "@a_toolsx2" or "a_toolsx2" in channel_input.lower():
-                    send_telegram_message(chat_id, "❌ عذراً، هذه القناة محظورة برمجياً ولا يمكن إضافتها كاشتراك إجباري نهائياً.")
+                # 🛑 شرط حماية صارم يمنع إضافة @tucosprofit أو أي قناة عشوائية مشابهة تلقائياً
+                if any(bad in channel_input.lower() for bad in ["tucos", "tools", "a_tools"]):
+                    send_telegram_message(chat_id, "❌ عذراً، هذه القناة محظورة برمجياً ولا يمكن إضافتها نهائياً.")
                     cursor.close(); db.close()
                     return "OK", 200
 
