@@ -77,7 +77,7 @@ def init_db():
                             value REAL
                         )''')
         # إدخال القيم الافتراضية إذا لم تكن موجودة
-        cursor.execute("INSERT INTO bot_settings (key, value) VALUES ('referral_reward', 0.1), ('min_withdrawal', 1.0) ON CONFLICT (key) DO NOTHING")
+        cursor.execute("INSERT INTO bot_settings (key, value) VALUES ('referral_reward', 0.01), ('min_withdrawal', 0.02) ON CONFLICT (key) DO NOTHING")
         conn.commit()
         cursor.close()
         conn.close()
