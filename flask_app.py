@@ -15,11 +15,6 @@ PRIMARY_ADMIN_USERNAME = "@m9aws"
 PROOF_CHANNEL_ID = "@Proofsofbotwithdrawal"
 ADMIN_CHANNEL_ID = "-1003509587836"
 
-bot_settings = {
-    "referral_reward": 0.01,
-    "min_withdrawal": 0.01
-}
-
 BOT_USERNAME = "NeoEarnbot"
 try:
     bot_info = requests.get(f"{TELEGRAM_API_URL}/getMe").json()
@@ -76,6 +71,13 @@ def init_db():
                             bot_name TEXT PRIMARY KEY,
                             bot_url TEXT
                         )''')
+        # جدول حفظ إعدادات البوت بشكل دائم لا تضيع عند إعادة تشغيل راندر
+        cursor.execute('''CREATE TABLE IF NOT EXISTS bot_settings (
+                            key TEXT PRIMARY KEY,
+                            value REAL
+                        )''')
+        # إدخال القيم الافتراضية إذا لم تكن موجودة
+        cursor.execute("INSERT INTO bot_settings (key, value) VALUES ('referral_reward', 0.1), ('min_withdrawal', 1.0) ON CONFLICT (key) DO NOTHING")
         conn.commit()
         cursor.close()
         conn.close()
@@ -84,6 +86,27 @@ def init_db():
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
+
+def get_setting(key, default_val):
+    try:
+        db = get_db()
+        cursor = db.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT value FROM bot_settings WHERE key = %s", (key,))
+        row = cursor.fetchone()
+        cursor.close(); db.close()
+        return row["value"] if row else default_val
+    except Exception:
+        return default_val
+
+def update_setting(key, val):
+    try:
+        db = get_db()
+        cursor = db.cursor()
+        cursor.execute("INSERT INTO bot_settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (key, val))
+        db.commit()
+        cursor.close(); db.close()
+    except Exception:
+        pass
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -160,17 +183,14 @@ def get_next_pending_task(chat_id):
         else:
             progress["bots_done"] = True
 
-    # جلب القنوات المعتمدة فقط من قاعدة البيانات التي أضافها الأدمن
     cursor.execute("SELECT channel_username FROM forced_channels")
     forced_channels = [row["channel_username"] for row in cursor.fetchall()]
     cursor.close()
     db.close()
 
-    # قائمة سوداء صارمة لأي قنوات مشبوهة أو عشوائية معروفة لمنع ظهورها نهائياً
     blacklist_channels = ["@a_toolsx2", "@tucosprofit", "tucosprofit"]
 
     for ch in forced_channels:
-        # فحص إضافي للتأكد من أن القناة ليست ضمن القائمة السوداء العشوائية
         if ch.lower().strip() in blacklist_channels or any(b in ch.lower() for b in ["tucos", "tools"]):
             continue
         try:
@@ -228,18 +248,28 @@ def execute_broadcast(admin_id):
     if not b_msg: return
     db = get_db()
     cursor = db.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT chat_id FROM users")
+    # جلب حسابات المستخدمين الفردية حصرياً (chat_id الموجبة التي تمثل الأشخاص وليست المجموعات أو القنوات السالبة)
+    cursor.execute("SELECT chat_id FROM users WHERE chat_id > 0")
     users = cursor.fetchall()
     cursor.close()
     db.close()
     success = 0
+    
+    # قائمة مؤقتة لمنع إرسال الرسالة أكثر من مرة لنفس المستخدم في نفس الإذاعة
+    sent_set = set()
     for u in users:
+        u_id = u["chat_id"]
+        if u_id in sent_set:
+            continue
+        sent_set.add(u_id)
         try:
-            requests.post(f"{TELEGRAM_API_URL}/copyMessage", json={"chat_id": u["chat_id"], "from_chat_id": admin_id, "message_id": b_msg})
+            requests.post(f"{TELEGRAM_API_URL}/copyMessage", json={"chat_id": u_id, "from_chat_id": admin_id, "message_id": b_msg})
             success += 1
-        except Exception: pass
+        except Exception: 
+            pass
+            
     broadcast_data.pop(admin_id, None)
-    send_telegram_message(admin_id, f"📊 تمت الإذاعة بنجاح إلى `{success}` مستخدم.")
+    send_telegram_message(admin_id, f"📊 تمت الإذاعة بنجاح إلى `{success}` مستخدم (في الخاصة فقط دون تكرار).")
 
 def send_main_menu(chat_id, text):
     reply_keyboard = {"keyboard": [[{"text": "🎁 رابط الإحالة"}, {"text": "💎 رصيدي والسحب"}], [{"text": "💳 ربط المحفظة"}, {"text": "📊 إحصائيات البوت"}], [{"text": "📞 الدعم الفني"}]], "resize_keyboard": True}
@@ -297,11 +327,11 @@ def verify():
         ref_id = u_row["invited_by"]
         cursor.execute("SELECT 1 FROM referrals WHERE referrer_id = %s AND referred_id = %s", (ref_id, user_id))
         if not cursor.fetchone():
-            reward = bot_settings["referral_reward"]
+            reward = get_setting("referral_reward", 0.1)
             cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (reward, ref_id))
             cursor.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (ref_id, user_id))
             db.commit()
-            send_telegram_message(ref_id, f"🎉 مستخدم جديد انضم عبر رابطك وأتم التحقق! حصلت على `{reward} TON`.")
+            send_telegram_message(ref_id, f"🎉 مستخدم جديد انضم عبر رابطك وأتم التحقق! حصلت على `{reward} USDT`.")
 
     cursor.close(); db.close()
     return jsonify({'success': True})
@@ -373,15 +403,15 @@ def webhook():
 
             if action == "approve":
                 time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                proof_text = f"💎 **Payment Successful!**\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` TON\n📥 المحفظة: `{wallet}`\n⏰ التوقيت: `{time_str}`"
+                proof_text = f"💎 **Payment Successful!**\n👤 المستخدم: @{username}\n💵 الكمية: `{amount}` USDT\n📥 طريقة الدفع (محفظة/بينانس): `{wallet}`\n⏰ التوقيت: `{time_str}`"
                 requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": PROOF_CHANNEL_ID, "text": proof_text, "parse_mode": "Markdown"})
-                send_telegram_message(u_id, f"🎉 **تم قبول طلب سحبك بنجاح!**\n💵 الكمية: `{amount} TON`")
+                send_telegram_message(u_id, f"🎉 **تم قبول طلب سحبك بنجاح!**\n💵 الكمية: `{amount} USDT`")
                 new_text = cb["message"]["text"] + f"\n\n✅ **Approved by Admin**"
             else:
                 if u_id not in ADMIN_IDS:
                     cursor.execute("UPDATE users SET balance = balance + %s WHERE chat_id = %s", (amount, u_id))
                     db.commit()
-                send_telegram_message(u_id, f"❌ **عذراً، تم رفض طلب سحبك (`{amount} TON`) وإعادة الرصيد.**")
+                send_telegram_message(u_id, f"❌ **عذراً، تم رفض طلب سحبك (`{amount} USDT`) وإعادة الرصيد.**")
                 new_text = cb["message"]["text"] + f"\n\n❌ **Rejected by Admin**"
 
             requests.post(f"{TELEGRAM_API_URL}/editMessageText", json={"chat_id": chat_id, "message_id": cb["message"]["message_id"], "text": new_text, "parse_mode": "Markdown"})
@@ -395,13 +425,13 @@ def webhook():
         if user_who_clicked in ADMIN_IDS:
             if data == "start_broadcast":
                 admin_states[user_who_clicked] = "waiting_broadcast"
-                send_telegram_message(user_who_clicked, "📢 أرسل الرسالة التي تريد إذاعتها:")
+                send_telegram_message(user_who_clicked, "📢 أرسل الرسالة التي تريد إذاعتها للمستخدمين في الخاصة:")
             elif data == "set_ref_reward":
                 admin_states[user_who_clicked] = "waiting_ref_reward"
-                send_telegram_message(user_who_clicked, "✍ أدخل سعر الإحالة الجديد:")
+                send_telegram_message(user_who_clicked, f"✍ أدخل سعر الإحالة الجديد (الحالي: {get_setting('referral_reward', 0.1)} USDT):")
             elif data == "set_min_withdrawal":
                 admin_states[user_who_clicked] = "waiting_min_withdrawal"
-                send_telegram_message(user_who_clicked, "✍️ أدخل الحد الأدنى للسحب:")
+                send_telegram_message(user_who_clicked, f"✍️ أدخل الحد الأدنى للسحب (الحالي: {get_setting('min_withdrawal', 1.0)} USDT):")
             elif data == "add_channel":
                 admin_states[user_who_clicked] = "waiting_add_channel"
                 send_telegram_message(user_who_clicked, "📢 أرسل معرف القناة (مثال: `@Channel`):")
@@ -465,7 +495,7 @@ def webhook():
             cursor.close(); db.close()
             if not check_and_prompt_tasks(chat_id):
                 return "OK", 200
-            send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت NeoEarnbot ⚡")
+            send_main_menu(chat_id, "✨ أهلاً بك مجدداً في بوت الأرباح ⚡")
             return "OK", 200
 
         if not check_and_prompt_tasks(chat_id):
@@ -482,17 +512,23 @@ def webhook():
             st = admin_states.pop(chat_id)
             if st == "waiting_broadcast":
                 broadcast_data[chat_id] = msg["message_id"]
-                send_telegram_message(chat_id, "تأكيد الإذاعة لجميع المستخدمين؟", reply_markup={"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]})
+                send_telegram_message(chat_id, "تأكيد الإذاعة لجميع المستخدمين في الخاصة فقط؟", reply_markup={"inline_keyboard": [[{"text": "🚀 إرسال الآن", "callback_data": "confirm_broadcast"}]]})
             elif st == "waiting_ref_reward":
-                bot_settings["referral_reward"] = float(text.strip())
-                send_telegram_message(chat_id, "✅ تم تحديث مكافأة الإحالة.")
+                try:
+                    new_reward = float(text.strip())
+                    update_setting("referral_reward", new_reward)
+                    send_telegram_message(chat_id, f"✅ تم تحديث مكافأة الإحالة إلى `{new_reward} USDT` وحفظها في قاعدة البيانات بشكل دائم.")
+                except ValueError:
+                    send_telegram_message(chat_id, "❌ قيمة غير صالحة، يرجى إرسال رقم صحيح.")
             elif st == "waiting_min_withdrawal":
-                bot_settings["min_withdrawal"] = float(text.strip())
-                send_telegram_message(chat_id, "✅ تم تحديث الحد الأدنى للسحب.")
+                try:
+                    new_min = float(text.strip())
+                    update_setting("min_withdrawal", new_min)
+                    send_telegram_message(chat_id, f"✅ تم تحديث الحد الأدنى للسحب إلى `{new_min} USDT` وحفظه في قاعدة البيانات بشكل دائم.")
+                except ValueError:
+                    send_telegram_message(chat_id, "❌ قيمة غير صالحة، يرجى إرسال رقم صحيح.")
             elif st == "waiting_add_channel":
                 channel_input = text.strip()
-                
-                # 🛑 شرط حماية صارم يمنع إضافة @tucosprofit أو أي قناة عشوائية مشابهة تلقائياً
                 if any(bad in channel_input.lower() for bad in ["tucos", "tools", "a_tools"]):
                     send_telegram_message(chat_id, "❌ عذراً، هذه القناة محظورة برمجياً ولا يمكن إضافتها نهائياً.")
                     cursor.close(); db.close()
@@ -505,7 +541,7 @@ def webhook():
             elif st == "waiting_bot_url":
                 temp_bot_data[chat_id] = {"url": text.strip()}
                 admin_states[chat_id] = "waiting_bot_name"
-                send_telegram_message(chat_id, "أرسل اسم البوت الظاهر للمستخدم:")
+                send_telegram_message(chat_id, "🤖 أرسل اسم البوت الظاهر للمستخدم:")
             elif st == "waiting_bot_name":
                 b_url = temp_bot_data.pop(chat_id, {}).get("url", "")
                 b_name = text.strip()
@@ -520,7 +556,7 @@ def webhook():
             if st == "waiting_wallet":
                 cursor.execute("UPDATE users SET wallet = %s WHERE chat_id = %s", (text.strip(), chat_id))
                 db.commit(); cursor.close(); db.close()
-                send_telegram_message(chat_id, "✅ تم حفظ المحفظة بنجاح!")
+                send_telegram_message(chat_id, "✅ تم حفظ عنوان المحفظة/بينانس بنجاح!")
                 send_main_menu(chat_id, "القائمة الرئيسية:")
                 return "OK", 200
             elif st == "waiting_withdraw_amount":
@@ -535,13 +571,14 @@ def webhook():
                 urow = cursor.fetchone()
                 if not urow or not urow["wallet"]:
                     cursor.close(); db.close()
-                    send_telegram_message(chat_id, "⚠️ يرجى ربط المحفظة أولاً.")
+                    send_telegram_message(chat_id, "⚠️ يرجى ربط المحفظة أو بينانس أولاً.")
                     return "OK", 200
 
-                if amount < bot_settings["min_withdrawal"] or amount > urow["balance"]:
+                min_w = get_setting("min_withdrawal", 1.0)
+                if amount < min_w or amount > urow["balance"]:
                     user_states[chat_id] = "waiting_withdraw_amount"
                     cursor.close(); db.close()
-                    send_telegram_message(chat_id, "❌ عذراً، الكمية غير صالحة أو الرصيد غير كافٍ.")
+                    send_telegram_message(chat_id, f"❌ عذراً، الكمية أقل من الحد الأدنى (`{min_w} USDT`) أو أن رصيدك غير كافٍ.")
                     return "OK", 200
 
                 cursor.execute("UPDATE users SET balance = balance - %s WHERE chat_id = %s", (amount, chat_id))
@@ -559,11 +596,11 @@ def webhook():
                         ]
                     ]
                 }
-                withdrawal_text = f"💎 **New Payout Request**\n\n📌 User : `{chat_id}` (@{username})\n💵 Amount : `{amount} TON`\n📥 Send To (Address): `{urow['wallet']}`\n📄 Transaction ID:\n`{tx_hash}`"
+                withdrawal_text = f"💎 **New Payout Request**\n\n📌 User : `{chat_id}` (@{username})\n💵 Amount : `{amount} USDT`\n📥 Wallet/Binance ID: `{urow['wallet']}`\n📄 Transaction ID:\n`{tx_hash}`"
                 requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": ADMIN_CHANNEL_ID, "text": withdrawal_text, "parse_mode": "Markdown", "reply_markup": admin_markup})
 
                 cursor.close(); db.close()
-                send_telegram_message(chat_id, f"✅ **تم إرسال طلب السحب (`{amount} TON`) بنجاح وهو قيد المراجعة من الإدارة.**")
+                send_telegram_message(chat_id, f"✅ **تم إرسال طلب السحب (`{amount} USDT`) بنجاح وهو قيد المراجعة من الإدارة.**")
                 send_main_menu(chat_id, "القائمة الرئيسية:")
                 return "OK", 200
 
@@ -572,7 +609,7 @@ def webhook():
             cursor.execute("SELECT COUNT(*) as count FROM referrals WHERE referrer_id = %s", (chat_id,))
             cnt = cursor.fetchone()["count"]
             cursor.close(); db.close()
-            send_telegram_message(chat_id, f"🎁 **نظام الإحالات:**\n\n🔗 رابطك:\n`{ref_link}`\n\n👥 عدد المدعوين: `{cnt}`")
+            send_telegram_message(chat_id, f"🎁 **نظام الإحالات:**\n\n🔗 رابطك:\n`{ref_link}`\n\n👥 عدد المدعوين: `{cnt}`\n💰 مكافأة كل إحالة: `{get_setting('referral_reward', 0.1)} USDT`")
             return "OK", 200
 
         elif text == "💎 رصيدي والسحب":
@@ -580,19 +617,20 @@ def webhook():
             urow = cursor.fetchone()
             cursor.close(); db.close()
             if not urow or not urow["wallet"]:
-                send_telegram_message(chat_id, "⚠️ ربط المحفظة مطلوب أولاً.")
+                send_telegram_message(chat_id, "⚠️ ربط محفظة TONKeeper أو Binance ID مطلوب أولاً.")
                 return "OK", 200
-            if urow["balance"] < bot_settings["min_withdrawal"]:
-                send_telegram_message(chat_id, f"❌ رصيدك أقل من الحد الأدنى (`{bot_settings['min_withdrawal']} TON`).")
+            min_w = get_setting("min_withdrawal", 1.0)
+            if urow["balance"] < min_w:
+                send_telegram_message(chat_id, f"❌ رصيدك أقل من الحد الأدنى للسحب (`{min_w} USDT`).")
                 return "OK", 200
             user_states[chat_id] = "waiting_withdraw_amount"
-            send_telegram_message(chat_id, f"💸 رصيدك المتاح: `{urow['balance']} TON`\n✍️ أرسل كمية السحب:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
+            send_telegram_message(chat_id, f"💸 رصيدك المتاح: `{urow['balance']} USDT`\n✍️ أرسل كمية السحب:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
             return "OK", 200
 
         elif text == "💳 ربط المحفظة":
             user_states[chat_id] = "waiting_wallet"
             cursor.close(); db.close()
-            send_telegram_message(chat_id, f"💳 أرسل عنوان محفظة TON الخاصة بك:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
+            send_telegram_message(chat_id, f"💳 أرسل عنوان محفظة **TONKeeper** أو **Binance ID** الخاص بك:", reply_markup={"keyboard": [[{"text": "🔙 العودة للقائمة الرئيسية"}]], "resize_keyboard": True})
             return "OK", 200
 
         elif text == "📊 إحصائيات البوت":
@@ -601,7 +639,7 @@ def webhook():
             cursor.execute("SELECT COUNT(*) as ver FROM users WHERE verified = 1")
             ver = cursor.fetchone()["ver"]
             cursor.close(); db.close()
-            send_telegram_message(chat_id, f"📊 الإحصائيات:\n👥 الإجمالي: `{tot}`\n✅ الموثقون: `{ver}`")
+            send_telegram_message(chat_id, f"📊 الإحصائيات:\n👥 إجمالي المستخدمين: `{tot}`\n✅ الموثقون: `{ver}`")
             return "OK", 200
 
         elif text == "📞 الدعم الفني":
